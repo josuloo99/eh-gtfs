@@ -216,6 +216,72 @@ Settings (optional environment variables, e.g. under `environment:` in `docker-c
 `LURRALDEBUS_RATE` (requests/s, default 1.0) and `LURRALDEBUS_MAX_STOPS` (default 60) tune the limits. The Info tab shows the source status per
 operator.
 
+## Directions (journey planner)
+
+The top bar has a *Directions* button (and every stop has "from here" / "to here"): pick a start and a destination
+and the app finds how to get there by walking and by every operator's services, mixing them freely.
+
+- **Start and destination** can be your location, a stop or station, a town or neighbourhood (a gazetteer of
+  4,883 places in `places.json`, searched in Basque, Spanish and French, offline), or any point: choose it on the
+  map, or right-click / long-press the map ("Directions from here / to here"). A pinned point can be dragged.
+- **When**: *Now* uses the live data (delays, cancellations, skipped stops, Lurraldebus arrivals) exactly as the stop
+  screens do; *Leave* and *Arrive* take a date and a time and use the published timetables only. "Earlier options" and
+  "Later options" look further. A journey that is not today says which day it is.
+- **Result**: up to a handful of options (fastest, fewest changes, the next departures), each with its legs, stops,
+  live delay, the service alerts of its lines, walking directions (turn by turn, in the interface language) and the
+  route on the map. A direct walk is offered when it is short.
+
+### How it works
+
+- `planner.py` reads every operator's timetable into memory once (about 5 s, 300 MB for all of Euskal Herria): trips
+  that call at the same stops are grouped into patterns with their times in columns. It then runs **RAPTOR** (rounds of
+  "ride one more vehicle") for the fastest journey with 1, 2, 3, 4 and 5 vehicles. Searching backwards in time
+  ("arrive by") is the same search over a mirrored timetable. A search takes 0.1 to 2 seconds.
+- After the fastest arrival the search is run backwards from it, to leave as late as possible without arriving later
+  (no pointless waiting at the first stop); the next options start after that.
+- **Walking** is a separate service, **[Valhalla](https://github.com/valhalla/valhalla)** (pedestrian profile),
+  built from the OpenStreetMap extracts of Euskadi, Nafarroa and Aquitaine (which holds Iparralde). It times the
+  stops worth walking to at both ends (the nearest stop of every line, and the stations: one matrix request),
+  checks every change on foot that a journey uses, and gives the path and the turn-by-turn steps. A change that
+  turns out longer than the straight-line estimate is forbidden and the search runs again.
+  (Valhalla was chosen over GraphHopper because it builds one graph from several regional extracts, has a many to many
+  matrix, and is a single container.)
+- **Without Valhalla** (`VALHALLA_URL` empty, or the service down, or still building) everything still works with walking
+  times estimated from the straight line, and the screen says so.
+- Not covered: fares, accessibility of stops, bikes, and real-time data for a future date.
+
+### Running it
+
+With Docker nothing is needed: `docker compose up -d` starts the app **and** the `valhalla` service. On its first start
+Valhalla downloads about 400 MB of OpenStreetMap data and builds its graph: **about 10 minutes, up to 3 GB of RAM while
+building**, then 2 GB of RAM and 1.5 GB of disk at rest. The graph is kept in the `valhalla-data` volume, so later starts take
+seconds. The app is usable meanwhile (walking times are estimated until the graph is ready). To refresh the map data,
+remove the volume (`docker compose down && docker volume rm <project>_valhalla-data`). To run without it, delete the
+`valhalla` service and the `VALHALLA_URL` line from `docker-compose.yml`.
+
+Without Docker, run Valhalla yourself (for example `docker run -p 8002:8002 -v $PWD/valhalla:/custom_files -e
+tile_urls="<the three extracts of docker-compose.yml>" ghcr.io/nilsnolde/docker-valhalla/valhalla:3.5.1`) and start the
+app with `VALHALLA_URL=http://127.0.0.1:8002 python3 server.py` (that is also the default address).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VALHALLA_URL` | `http://127.0.0.1:8002` | Walking router. Empty disables it. |
+| `WALK_SPEED_KMH` | `4.8` | Walking speed used by the router and by the estimates. |
+
+### API
+
+- `GET /api/plan?from=<point>&to=<point>&mode=now|dep|arr&date=YYYYMMDD&time=HH:MM&max_walk=1000&lang=eu`, where a point
+  is `ll:<lat>,<lon>` or `st:<operator>|<station id>`; `from_name` / `to_name` label them. `t=<epoch>` replaces date
+  and time and `live=1` keeps live data when paging. Returns the journeys (legs, times, shapes, steps, alerts) or an
+  `error` (`no_route`, `no_stops_near`, `out_of_area`, `date_out_of_range`, `warming_up`, ...).
+- `GET /api/geocode?q=<text>` (towns, neighbourhoods and stops) or `?lat=&lon=` (the place a point is near).
+- `GET /api/plan_status`: whether the timetable index is ready and which walking engine is in use.
+
+### The gazetteer
+
+`places.json` comes from OpenStreetMap (ODbL). To refresh it: `python3 tools/make_places.py` (asks the Overpass API once,
+keeps the places inside the territory outline of `region.py`).
+
 ## Docker
 
 The image is built by GitHub Actions (`.github/workflows/docker.yml`) on every push to `master` and published to
@@ -229,12 +295,14 @@ needed):
     docker compose up -d             # pulls the image, http://localhost:8000
     docker compose pull && docker compose up -d    # update to the latest image
 
-The first start imports all timetables (about a minute); they are kept in the `mugitu-data` volume.
+The first start imports all timetables (about a minute); they are kept in the `mugitu-data` volume. The compose file
+also starts the walking router for the directions screen (see "Directions": its first start builds a graph, about
+10 minutes).
 To use another port, change the left number in `ports:`. The container runs as `APP_UID:APP_GID` (default
 1000:1000); only if you replace the `mugitu-data` volume with a host folder, set them in a `.env` next to the
 compose file to your own ids (the output of `id -u` and `id -g`, e.g. `APP_UID=1000`, `APP_GID=1000`) and make the folder writable by them.
 The container needs outbound HTTPS access to
-opendata.euskadi.eus, transport.data.gouv.fr, app.mecatran.com and, in the browser, tiles.openfreemap.org and tile.openstreetmap.org. Put a reverse proxy (Caddy, nginx, Traefik) in
+opendata.euskadi.eus, transport.data.gouv.fr, app.mecatran.com (and download.geofabrik.de, from the `valhalla` container, on its first start) and, in the browser, tiles.openfreemap.org and tile.openstreetmap.org. Put a reverse proxy (Caddy, nginx, Traefik) in
 front for HTTPS if you expose it publicly; installing the app on a phone requires HTTPS.
 
 First publish: GitHub keeps a new package private. After the first workflow run open the repository's

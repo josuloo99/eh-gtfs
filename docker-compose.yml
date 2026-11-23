@@ -14,6 +14,35 @@ services:
     environment:
       TZ: Europe/Madrid
       NAP_API_KEY: ${NAP_API_KEY:-}   # Nafarroa and ALSA timetables (Spanish Ministry NAP); set it in .env, see README
+      VALHALLA_URL: http://valhalla:8002   # walking router of the directions screen; empty = straight-line estimates
+    depends_on:
+      - valhalla             # only the start order: the app works (with estimated walking times) while the router builds
+
+  # Walking router (Valhalla) for the directions screen. On its first start it downloads the OpenStreetMap extracts of
+  # Euskal Herria and builds its graph (about 10 minutes, 3 GB of RAM while building, 1.5 GB of disk); the graph is kept in
+  # the volume, so later starts take seconds. Nothing is published: only the app talks to it. To run without it, delete
+  # this service and the VALHALLA_URL line above (see "Directions" in the README).
+  valhalla:
+    image: ghcr.io/nilsnolde/docker-valhalla/valhalla:3.5.1
+    container_name: mugitu-valhalla
+    restart: unless-stopped
+    volumes:
+      - valhalla-data:/custom_files
+    environment:
+      tile_urls: >-
+        https://download.geofabrik.de/europe/spain/pais-vasco-latest.osm.pbf
+        https://download.geofabrik.de/europe/spain/navarra-latest.osm.pbf
+        https://download.geofabrik.de/europe/france/aquitaine-latest.osm.pbf
+      server_threads: ${VALHALLA_THREADS:-2}
+      build_admins: "False"
+      build_time_zones: "False"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8002/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20m
 
 volumes:
   mugitu-data:
+  valhalla-data:

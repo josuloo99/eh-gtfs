@@ -259,6 +259,7 @@ function sheetOffsets() {
 }
 function setSheet(state) {
   sheetEl.dataset.state = state;
+  document.body.dataset.sheet = isMobile() ? state : '';
   if (!isMobile()) { sheetEl.style.removeProperty('--off'); sheetEl.style.removeProperty('--pad'); $('#panel-body').inert = false; return; }
   sheetOff = sheetOffsets()[state];
   sheetEl.style.setProperty('--off', sheetOff + 'px');
@@ -541,7 +542,7 @@ async function loadStations() {
         fillColor: MODE_COLOR[railMode || ms[0]] || '#2d6cdf', fillOpacity: 1,
       });
       mk.bindTooltip(esc(s.name), { direction: 'top', offset: [0, -4] });
-      mk.on('click', () => openStation(s.agency, s.station_id));
+      mk.on('click', () => { if (!planPickStation(s)) openStation(s.agency, s.station_id); });
       mk.addTo(stnLayer);
     }
   } catch (e) { console.warn(e); }
@@ -646,6 +647,8 @@ function render() {
   else if (v === 'route') renderRoute(body);
   else if (v === 'alerts') renderAlerts(body);
   else if (v === 'info') renderInfo(body);
+  else if (v === 'plan') renderPlan(body);
+  if (v !== 'plan') planLeave();
   setHash();
 }
 function setHash() {
@@ -740,7 +743,9 @@ function drawStationHeader(body) {
     <button type="button" class="btn small" data-act="focus-stn">${ic('target')}${t('on_map')}</button>
     <button type="button" class="star" data-act="fav" title="${fav ? t('remove_fav') : t('add_fav')}" aria-label="${fav ? t('remove_fav') : t('add_fav')}">${ic(fav ? 'star' : 'starO')}</button></div>
     <div class="row" style="margin-bottom:8px"><span class="mode-ic lg">${modeIcons(st.modes)}</span>
-      <div class="grow"><div class="title">${esc(st.name)}</div><div class="muted small">${esc(st.agency_name)}</div></div></div>`;
+      <div class="grow"><div class="title">${esc(st.name)}</div><div class="muted small">${esc(st.agency_name)}</div></div></div>
+    <div class="row wrap" style="margin-bottom:8px"><button type="button" class="btn small grow" data-act="plan-from-stn" title="${t('plan_dir_from')}" aria-label="${t('plan_dir_from')}">${ic('directions')}${t('plan_here_from')}</button>
+      <button type="button" class="btn small grow" data-act="plan-to-stn" title="${t('plan_dir_to')}" aria-label="${t('plan_dir_to')}">${ic('pin')}${t('plan_here_to')}</button></div>`;
   h += dateBar(S.view);
   if (d.date) {
     h += schedList(d);
@@ -1225,6 +1230,7 @@ document.addEventListener('click', ev => {
     case 'install': if (deferredInstall) { deferredInstall.prompt(); deferredInstall.userChoice.finally(() => { deferredInstall = null; if (S.view.name === 'info') render(); }); } break;
     case 'ag-all': S.filters.agencies = null; filtersChanged(); break;
     case 'ag-none': S.filters.agencies = new Set(); filtersChanged(); break;
+    default: planAct(a, d, el);
   }
 });
 document.addEventListener('change', ev => {
@@ -1243,7 +1249,8 @@ document.addEventListener('change', ev => {
 $$('#tabs button').forEach(b => b.addEventListener('click', () => { setTab(b.dataset.tab); if (b.dataset.tab === 'alerts') loadAlerts(); expandSheet(); }));
 $('#btn-locate').addEventListener('click', locate);
 // a tap on empty map closes whatever is open and shows every service again (markers and the line itself swallow their own taps)
-map.on('click', () => {
+map.on('click', e => {
+  if (planMapClick(e)) return;
   if (DETAIL_VIEWS.includes(S.view.name)) closeDetail();
   if (isMobile()) setSheet('closed');
 });
@@ -1317,6 +1324,7 @@ async function loadAgencies() {
 }
 async function boot() {
   const h = decodeURIComponent((location.hash || '').slice(1));
+  planInit();
   $('#btn-locate').innerHTML = ic('target');
   $('#search-ic').innerHTML = ic('search');
   $('#btn-lang').innerHTML = ic('globe');

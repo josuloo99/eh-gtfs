@@ -19,6 +19,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import core
+import places
+import planner
+import walk
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(ROOT, "static")
@@ -118,7 +121,38 @@ def api(path, q):
         return {"routes": core.routes_of(slug)}
     if path == "/api/alerts":
         return {"alerts": core.alerts(_s(q, "agency") or None)}
+    if path == "/api/plan":
+        return planner.plan(q, _s(q, "lang", "eu"))
+    if path == "/api/plan_status":
+        return planner.status()
+    if path == "/api/geocode":
+        return _geocode(q)
     return None
+
+
+def _geocode(q):
+    """Places for the "from / to" boxes of the journey planner. ?q= text: towns, neighbourhoods and stations that
+    match. ?lat=&lon= a point: the place it is near (for a spot tapped on the map)."""
+    lang = _s(q, "lang", "eu")
+    lat, lon = _f(q, "lat"), _f(q, "lon")
+    if lat is not None and lon is not None:
+        p = places.nearest(lat, lon, lang)
+        return {"place": {"label": p["label"], "kind": p["kind"], "dist": p["dist"]} if p else None}
+    text = _s(q, "q").strip()
+    out = []
+    for p in places.search(text, lang, 6):
+        out.append({"type": "place", "name": p["label"], "kind": p["kind"], "lat": p["lat"], "lon": p["lon"],
+                    "_k": (p["rank"], 0, places.KIND_RANK.get(p["kind"], 4))})
+    qn = places.norm(text)
+    for s in core.search_stations(text, 8):
+        n = places.norm(s["name"])
+        rank = 0 if n == qn else 1 if n.startswith(qn) else 2
+        out.append({"type": "station", "name": s["name"], "agency": s["agency"], "agency_name": s["agency_name"],
+                    "station_id": s["station_id"], "lat": s["lat"], "lon": s["lon"], "modes": s["modes"], "_k": (rank, 1, 2)})
+    out.sort(key=lambda x: x["_k"])
+    for x in out:
+        del x["_k"]
+    return {"results": out[:9]}
 
 
 def _alert_applies(a, slug, station_id, items):
@@ -248,6 +282,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     threading.Thread(target=core.updater_loop, daemon=True).start()
     threading.Thread(target=core.lb_tracker_loop, daemon=True).start()
+    planner.start()
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     srv.daemon_threads = True
     print("Serving on http://%s:%d" % (a.host, a.port))
