@@ -111,8 +111,8 @@ input:focus-visible, select:focus-visible { outline-offset: -1px; }
   background: var(--surface); border-radius: var(--r-md); box-shadow: var(--shadow); border: 1px solid var(--line); z-index: 10;
 }
 .menu button { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); width: 100%; min-height: 48px; padding: 0 var(--sp-3); border: 0; background: none; border-radius: var(--r-sm); font-weight: 600; text-align: left; }
-.menu button[aria-checked="true"] { background: var(--ink); color: var(--ink-text); }
-@media (hover: hover) { .menu button:hover:not([aria-checked="true"]) { background: var(--surface-2); } }
+.menu button[aria-current="true"] { background: var(--ink); color: var(--ink-text); }
+@media (hover: hover) { .menu button:hover:not([aria-current="true"]) { background: var(--surface-2); } }
 
 /* ---------------- layout (desktop: side panel + map) */
 #layout { flex: 1; display: flex; min-height: 0; position: relative; }
@@ -137,7 +137,7 @@ input:focus-visible, select:focus-visible { outline-offset: -1px; }
 #tabs .badge { position: absolute; top: 6px; left: calc(50% + 6px); }
 @media (hover: hover) { #tabs button:hover { color: var(--text); } }
 
-#resizer { width: 8px; margin-left: -4px; margin-right: -4px; cursor: col-resize; z-index: 1150; flex: none; position: relative; }
+#resizer { width: 8px; margin-left: -4px; margin-right: -4px; cursor: col-resize; touch-action: pan-y; z-index: 1150; flex: none; position: relative; }
 #resizer::after { content: ""; position: absolute; left: 3px; top: 50%; width: 2px; height: 44px; margin-top: -22px; border-radius: 1px; background: var(--muted); opacity: .35; }
 #resizer:hover::after, #resizer:focus-visible::after, body.resizing #resizer::after { opacity: 1; background: var(--ink); }
 body.resizing { cursor: col-resize; user-select: none; }
@@ -177,7 +177,7 @@ body.resizing #map { pointer-events: none; }
     transform: translateY(var(--off, 50dvh)); transition: transform var(--dur-short) var(--ease); will-change: transform;
   }
   #sheet.dragging { transition: none; }
-  .sheet-handle { display: flex; align-items: center; justify-content: center; flex: none; height: 32px; width: 100%; background: none; border: 0; padding: 0; touch-action: none; cursor: grab; }
+  .sheet-handle { display: flex; align-items: center; justify-content: center; flex: none; height: 32px; width: 100%; background: none; border: 0; padding: 0; touch-action: pan-x; cursor: grab; }
   .sheet-handle span { display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--muted); opacity: .6; }
   #panel-body { padding: 0 var(--sp-4) calc(var(--pad, 0px) + var(--sp-5)); }
 
@@ -346,10 +346,22 @@ table.src th { color: var(--muted); font-weight: 600; }
 .leaflet-control-attribution { font-size: 11px; background: color-mix(in srgb, var(--surface) 85%, transparent) !important; color: var(--muted); }
 .leaflet-control-attribution a { color: var(--text); }
 
+/* Reduced motion: spatial movement goes (panel sliding, markers gliding, map zoom animation); the short opacity
+   fades stay. Not a blanket "duration: 0.01ms", which can make things more jarring. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; scroll-behavior: auto !important; }
+  #sheet { transition: none; }
   .leaflet-marker-icon.veh { transition: none; }
+  .leaflet-zoom-anim .leaflet-zoom-animated { transition: none; }
 }
+
+/* text for assistive technology only; becomes visible when it receives focus (skip link) */
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important; clip-path: inset(50%) !important; overflow: hidden !important; width: 1px !important;
+  height: 1px !important; margin: -1px !important; padding: 0 !important; border: 0 !important; white-space: nowrap !important;
+}
+.skip-link { position: fixed; left: var(--sp-3); top: var(--sp-3); z-index: calc(var(--z-top) + 1); padding: var(--sp-3) var(--sp-4);
+  background: var(--ink); color: var(--ink-text); border-radius: var(--r-md); font-weight: 700; text-decoration: none; box-shadow: var(--shadow); }
+main:focus { outline: none; }
 
 /* the three kinds of vehicle position in the filters tab, each with a sample of its map marker */
 .checks.kinds label { min-height: 56px; }

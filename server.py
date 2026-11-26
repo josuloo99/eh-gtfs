@@ -5,6 +5,7 @@ Run:  python3 server.py [--port 8000] [--host 127.0.0.1]
 Only the Python 3.9+ standard library is required.
 """
 import argparse
+import base64
 import gzip
 import hashlib
 import json
@@ -166,6 +167,44 @@ def render_index(fp):
     return _LOCAL_REF.sub(version, html).encode("utf-8")
 
 
+# ---- security headers
+#
+# Sent with every response. The Content-Security-Policy belongs to the page: it allows scripts from this origin, the
+# external scripts index.html itself loads (analytics) and its inline scripts, each one by hash (computed when the
+# page is rendered, so editing an inline script needs no change here). Styles may be inline only as attributes: the
+# interface builds its markup with style="..." and MapLibre/Leaflet set styles on elements, but no <style> block is
+# allowed. Everything the map downloads comes from the hosts below.
+MAP_HOSTS = ("https://tiles.openfreemap.org",)                 # vector style, tiles, glyphs, sprites
+RASTER_HOSTS = ("https://*.tile.openstreetmap.org",)           # the "detailed" raster basemap
+_INLINE_SCRIPT = re.compile(rb"<script(?P<attrs>[^>]*)>(?P<code>.*?)</script>", re.S | re.I)
+_EXTERNAL_SCRIPT = re.compile(rb'<script[^>]*\ssrc="(https://[^/"]+)', re.I)
+
+
+def csp_for(html):
+    hashes = ["'sha256-%s'" % base64.b64encode(hashlib.sha256(m.group("code")).digest()).decode()
+              for m in _INLINE_SCRIPT.finditer(html) if b"src=" not in m.group("attrs").lower() and m.group("code").strip()]
+    external = sorted({h.decode() for h in _EXTERNAL_SCRIPT.findall(html)})
+    return "; ".join([
+        "default-src 'self'",
+        "script-src 'self' " + " ".join(hashes + external),
+        "style-src 'self'; style-src-attr 'unsafe-inline'",
+        "img-src 'self' data: blob: " + " ".join(MAP_HOSTS + RASTER_HOSTS),
+        "connect-src 'self' " + " ".join(MAP_HOSTS + tuple(external)),
+        "worker-src 'self' blob:",                              # MapLibre draws in a worker
+        "manifest-src 'self'",
+        "object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'none'",
+    ])
+
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "geolocation=(self), camera=(), microphone=(), payment=(), usb=()",
+    "X-Frame-Options": "DENY",                                 # with frame-ancestors 'none' in the CSP
+    "Cross-Origin-Opener-Policy": "same-origin",
+}
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "Mugitu/1.0"
@@ -187,17 +226,29 @@ class Handler(BaseHTTPRequestHandler):
         if enc:
             self.send_header("Content-Encoding", "gzip")
         self.send_header("Vary", "Accept-Encoding")
+        self._security_headers()
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
 
+    def _security_headers(self):
+        for k, v in SECURITY_HEADERS.items():
+            self.send_header(k, v)
+        # only meaningful (and only honoured) over HTTPS, i.e. behind the reverse proxy that terminates TLS
+        if self.headers.get("X-Forwarded-Proto") == "https":
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
+
     def _not_modified(self, extra):
         self.send_response(304)
+        self._security_headers()
         for k, val in extra.items():
             self.send_header(k, val)
         self.end_headers()
+
+    def do_HEAD(self):                 # same headers as GET, no body (_send skips it)
+        self.do_GET()
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -207,11 +258,11 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 logging.getLogger("moveuskadi").error("API error %s: %s", self.path, traceback.format_exc())
                 return self._send(500, json.dumps({"error": str(e)}).encode(), "application/json",
-                                  {"Cache-Control": "no-store"})
+                                  {"Cache-Control": "no-cache", "Cross-Origin-Resource-Policy": "same-origin"})
             if res is None:
                 return self._send(404, b'{"error":"not found"}', "application/json")
             return self._send(200, json.dumps(res, separators=(",", ":")).encode(), "application/json",
-                              {"Cache-Control": "no-store"})
+                              {"Cache-Control": "no-cache", "Cross-Origin-Resource-Policy": "same-origin"})
         rel = "index.html" if u.path in ("", "/") else u.path.lstrip("/")
         fp = os.path.normpath(os.path.join(STATIC, rel))
         if not fp.startswith(STATIC + os.sep) or not os.path.isfile(fp):
@@ -232,6 +283,8 @@ class Handler(BaseHTTPRequestHandler):
             cache = "public, max-age=31536000, immutable" if parse_qs(u.query).get("v") == [tag[:10]] else "no-cache"
         etag = 'W/"%s"' % tag
         headers = {"Cache-Control": cache, "ETag": etag}
+        if os.path.basename(fp) == "index.html":
+            headers["Content-Security-Policy"] = csp_for(body)
         if self.headers.get("If-None-Match") == etag:
             return self._not_modified(headers)
         if body is None:

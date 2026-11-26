@@ -63,10 +63,17 @@ const LANGS = [['eu', 'Euskara'], ['es', 'Español'], ['fr', 'Français'], ['en'
  *  (under its own key: the old 'lang' key also held languages that were merely detected, so it is ignored and removed). */
 const DEFAULT_LANG = 'eu';
 const LANG_KEY = 'langChoice';
-localStorage.removeItem('lang');
+/** localStorage that never throws: site data can be blocked, and a stored value can be corrupt. */
+const ls = {
+  get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* not persisted */ } },
+  del: k => { try { localStorage.removeItem(k); } catch (e) { /* nothing to remove */ } },
+  json: (k, dflt) => { try { const v = localStorage.getItem(k); return v == null ? dflt : JSON.parse(v); } catch (e) { return dflt; } },
+};
+ls.del('lang');
 
 const S = {
-  lang: localStorage.getItem(LANG_KEY) || DEFAULT_LANG,
+  lang: ls.get(LANG_KEY) || DEFAULT_LANG,
   tab: 'stops',
   view: { name: 'home' },
   hist: [],
@@ -77,17 +84,17 @@ const S = {
   filters: { modes: new Set(MODES), agencies: null, gps: true, est: true, sched: true, showStops: true, line: null },
   focus: null,           // {agency, route_id?, trip_id?} while a trip / route view is open
   selVeh: null,          // selected vehicle id
-  favs: JSON.parse(localStorage.getItem('favs') || '[]'),
+  favs: ls.json('favs', []),
   nearby: null,
   me: null,
   alerts: [],
-  linesAgency: localStorage.getItem('linesAgency') || '',
+  linesAgency: ls.get('linesAgency') || '',
   routesCache: {},
-  mapStyle: localStorage.getItem('mapStyle') === 'detailed' ? 'detailed' : 'simple',
+  mapStyle: ls.get('mapStyle') === 'detailed' ? 'detailed' : 'simple',
 };
 if (!I18N[S.lang]) S.lang = DEFAULT_LANG;
 try {
-  const f = JSON.parse(localStorage.getItem('filters2') || 'null');
+  const f = ls.json('filters2', null);
   if (f) {
     S.filters.modes = new Set(f.modes); S.filters.agencies = f.agencies ? new Set(f.agencies) : null;
     S.filters.gps = f.gps !== false; S.filters.est = f.est !== false; S.filters.sched = f.sched !== false; S.filters.showStops = f.showStops !== false; S.filters.line = f.line || null;
@@ -95,7 +102,7 @@ try {
 } catch (e) { /* ignore */ }
 function saveFilters() {
   const f = S.filters;
-  localStorage.setItem('filters2', JSON.stringify({ modes: [...f.modes], agencies: f.agencies ? [...f.agencies] : null, gps: f.gps, est: f.est, sched: f.sched, showStops: f.showStops, line: f.line }));
+  ls.set('filters2', JSON.stringify({ modes: [...f.modes], agencies: f.agencies ? [...f.agencies] : null, gps: f.gps, est: f.est, sched: f.sched, showStops: f.showStops, line: f.line }));
   updateAlertBadge();
 }
 
@@ -108,7 +115,7 @@ const nowTs = () => Date.now() / 1000 + S.skew;
 const pad = n => String(n).padStart(2, '0');
 const clock = ts => { const d = new Date(ts * 1000); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
 const clockS = ts => { const d = new Date(ts * 1000); return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); };
-const saveFavs = () => localStorage.setItem('favs', JSON.stringify(S.favs));
+const saveFavs = () => ls.set('favs', JSON.stringify(S.favs));
 const isFav = (a, id) => S.favs.some(f => f.agency === a && f.station_id === id);
 const agName = id => (S.agencies[id] && S.agencies[id].name) || id;
 const modeLabel = m => t('mode_' + m);
@@ -120,13 +127,9 @@ async function api(path, params) {
   const usp = new URLSearchParams();
   for (const [k, val] of Object.entries(params || {})) Array.isArray(val) ? val.forEach(x => usp.append(k, x)) : usp.set(k, val);
   const qs = params ? '?' + usp.toString() : '';
-  const ctl = new AbortController();
-  const to = setTimeout(() => ctl.abort(), 25000);
-  try {
-    const r = await fetch('/api/' + path + qs, { signal: ctl.signal, cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return await r.json();
-  } finally { clearTimeout(to); }
+  const r = await fetch('/api/' + path + qs, { signal: AbortSignal.timeout(25000), cache: 'no-store' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
 }
 
 /** "Updated 30 s ago" in the current language (word order differs, e.g. Basque). */
@@ -173,12 +176,13 @@ function badge(o) {
 function applyI18n() {
   document.documentElement.lang = S.lang;
   $$('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
-  $$('[data-i18n-ph]').forEach(el => el.placeholder = t(el.dataset.i18nPh));
+  $$('[data-i18n-ph]').forEach(el => { el.placeholder = t(el.dataset.i18nPh); el.setAttribute('aria-label', el.placeholder); });
+  $$('[data-i18n-aria]').forEach(el => el.setAttribute('aria-label', t(el.dataset.i18nAria)));
   $$('[data-i18n-title]').forEach(el => { el.title = t(el.dataset.i18nTitle); el.setAttribute('aria-label', el.title); });
 }
 
 // ───────────────────────────────────────────────────────────── map
-const map = L.map('map', { zoomControl: false, attributionControl: false, renderer: L.canvas({ tolerance: 12 }), tap: true, maxZoom: 19 }).fitBounds(EH_BOUNDS, { animate: false });
+const map = L.map('map', { zoomControl: false, attributionControl: false, renderer: L.canvas({ tolerance: 12 }), tap: true, maxZoom: 19, zoomAnimation: !reduceMotion.matches }).fitBounds(EH_BOUNDS, { animate: false });
 L.control.zoom({ position: 'bottomright' }).addTo(map);   // hidden on phones: pinch instead
 L.control.attribution({ prefix: false }).addTo(map);
 let baseLayers = [], glLayer = null, basemapReq = 0;
@@ -224,7 +228,7 @@ async function applyBasemap() {
     if (my !== basemapReq) return;                           // the theme or the style changed meanwhile
     const bg = (style.layers.find(l => l.type === 'background') || {}).paint;
     el.style.background = bg && typeof bg['background-color'] === 'string' ? bg['background-color'] : '';   // no flash while tiles load
-    const copy = JSON.parse(JSON.stringify(style));          // MapLibre may modify what it is given
+    const copy = structuredClone(style);                    // MapLibre may modify what it is given
     if (glLayer) glLayer.getMaplibreMap().setStyle(copy);    // theme switch: same map, same tiles, new colours
     else {
       dropBasemap();
@@ -635,7 +639,7 @@ function setFocus(f) { S.focus = f; drawVehicles(); }
 function clearRouteLayer() { routeLayer.clearLayers(); }
 
 function render() {
-  $$('#tabs button').forEach(b => { const on = b.dataset.tab === S.tab; b.classList.toggle('active', on); on ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current'); });
+  $$('#tabs button').forEach(b => { const on = b.dataset.tab === S.tab; b.classList.toggle('active', on); on ? b.setAttribute('aria-current', 'true') : b.removeAttribute('aria-current'); });
   const body = $('#panel-body');
   const v = S.view.name;
   if (v === 'home') renderHome(body);
@@ -647,7 +651,18 @@ function render() {
   else if (v === 'route') renderRoute(body);
   else if (v === 'alerts') renderAlerts(body);
   else if (v === 'info') renderInfo(body);
+  updateTitle();
   setHash();
+}
+/** The document title says where the user is: the stop, line or trip being viewed, else the section. */
+function updateTitle() {
+  const v = S.view, d = v.data;
+  let part = '';
+  if (v.name === 'station' && d && d.station) part = d.station.name;
+  else if (v.name === 'trip' && d) part = [d.line, d.headsign].filter(Boolean).join(' → ');
+  else if (v.name === 'route' && d) part = [d.line, d.long].filter(Boolean).join(' ');
+  else if (S.tab !== 'stops') part = t('tab_' + S.tab);
+  document.title = part ? part + ' · Mugitu' : t('app_title');
 }
 function setHash() {
   const v = S.view;
@@ -722,7 +737,7 @@ async function renderStation(body) {
     if (my !== depReq || S.view !== v) return;
     if (d.error === 'date_out_of_range' && v.date) { v.range = d.range; v.date = null; v.data = null; toast(t('date_out_of_range')); return renderStation(body); }
     if (d.error) { body.innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
-    v.data = d; v.range = d.range; S.skew = d.time - Date.now() / 1000;
+    v.data = d; v.range = d.range; S.skew = d.time - Date.now() / 1000; updateTitle();
     if (d.lines) v.chipItems = d.lines;     // the lines calling here today, for the filter chips
     drawStationHeader(body);
     if (v.scroll != null) { body.scrollTop = v.scroll; v.scroll = null; v.scrolled = true; }
@@ -886,7 +901,7 @@ async function renderTrip(body) {
     const d = await api('trip', { agency: v.agency, trip: v.trip, date: v.date || '', sched: v.sched ? '1' : '' });
     if (my !== tripReq || S.view !== v) return;
     if (d.error) { body.innerHTML = `<div class="row" style="margin-bottom:8px">${backBtn()}</div><div class="empty">${esc(t(d.error) === d.error ? d.error : pickErr(d.error))}</div>`; return; }
-    v.data = d;
+    v.data = d; updateTitle();
     const sched = !!d.sched_only;
     const veh = sched ? null : findVehicle(v);
     if (veh && S.selVeh !== veh.id) S.selVeh = veh.id;
@@ -977,7 +992,7 @@ async function renderLines(body) {
   if (!S.linesAgency || !S.agencies[S.linesAgency]) S.linesAgency = (ags.find(a => a.id === 'euskotren') || ags[0] || {}).id || '';
   body.innerHTML = `<select class="field" id="lines-ag" aria-label="${t('pick_agency')}">${byRegion(ags).map(([r, l]) => `<optgroup label="${esc(regionName(r))}">${l.map(a => `<option value="${esc(a.id)}"${a.id === S.linesAgency ? ' selected' : ''}>${esc(a.name)}${a.rt.vehicles || a.rt.trips ? ' (' + t('live').toLowerCase() + ')' : ''}</option>`).join('')}</optgroup>`).join('')}</select>
     <input type="search" id="lines-q" placeholder="${t('filter_lines')}" autocomplete="off" style="margin:8px 0"><div id="lines-list"><div class="empty">${t('loading')}</div></div>`;
-  $('#lines-ag').onchange = e => { S.linesAgency = e.target.value; localStorage.setItem('linesAgency', S.linesAgency); renderLines(body); };
+  $('#lines-ag').onchange = e => { S.linesAgency = e.target.value; ls.set('linesAgency', S.linesAgency); renderLines(body); };
   $('#lines-q').oninput = drawLinesList;
   if (!S.linesAgency) return;
   if (!S.routesCache[S.linesAgency]) {
@@ -1000,7 +1015,7 @@ async function renderRoute(body) {
   try {
     const d = await api('route', { agency: v.agency, route: v.route });
     if (S.view !== v) return;
-    v.data = d; v.range = d.range;
+    v.data = d; v.range = d.range; updateTitle();
     const c = colors(d);
     const isOnly = S.filters.line && S.filters.line.agency === v.agency && S.filters.line.route_id === v.route;
     let h = `<div class="row" style="margin-bottom:8px">${backBtn()}<div class="grow"></div>
@@ -1147,10 +1162,10 @@ function pickSuggestion(s) {
 // ───────────────────────────────────────────────────────────── language + theme
 function setLang(code, remember) {
   S.lang = I18N[code] ? code : DEFAULT_LANG;
-  if (remember) localStorage.setItem(LANG_KEY, S.lang);
+  if (remember) ls.set(LANG_KEY, S.lang);
   const nm = Object.fromEntries(LANGS)[S.lang];
   $('#btn-lang').setAttribute('aria-label', t('language') + ': ' + nm); $('#btn-lang').title = t('language');
-  $$('#lang-menu [data-lang]').forEach(b => b.setAttribute('aria-checked', b.dataset.lang === S.lang));
+  $$('#lang-menu [data-lang]').forEach(b => b.dataset.lang === S.lang ? b.setAttribute('aria-current', 'true') : b.removeAttribute('aria-current'));
   applyI18n(); updateThemeBtn(); renderMapFilter(); render();
 }
 function closeLangMenu() { $('#lang-menu').hidden = true; $('#btn-lang').setAttribute('aria-expanded', 'false'); }
@@ -1162,20 +1177,35 @@ $('#btn-lang').addEventListener('click', e => {
 document.addEventListener('click', e => { if (!e.target.closest('.lang-wrap')) closeLangMenu(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#lang-menu').hidden) { closeLangMenu(); $('#btn-lang').focus(); } });
 
+/** Colour scheme. With nothing stored the page follows the system; the toggle pins "light" or "dark" only when that
+ *  differs from the system (toggling back to what the system says removes the pin, so the page follows it again).
+ *  The choice is mirrored in <meta name="color-scheme"> ("light dark" = follow the system). */
+const sysDark = matchMedia('(prefers-color-scheme: dark)');
 const theme = () => document.documentElement.dataset.theme;
+const pinnedTheme = () => { const v = ls.get('theme'); return v === 'light' || v === 'dark' ? v : null; };
 function updateThemeBtn() {
   const dark = theme() === 'dark', b = $('#btn-theme');
   b.innerHTML = ic(dark ? 'sun' : 'moon');
   b.title = t(dark ? 'theme_to_light' : 'theme_to_dark'); b.setAttribute('aria-label', b.title);
 }
-function setTheme(th, save) {
+function setTheme(th) {
   document.documentElement.dataset.theme = th;
-  if (save) localStorage.setItem('theme', th);
   $$('meta[name=theme-color]').forEach(m => { m.removeAttribute('media'); m.content = cssv('--surface'); });
   updateThemeBtn(); applyBasemap(); loadStations(); drawVehicles();
 }
-$('#btn-theme').addEventListener('click', () => setTheme(theme() === 'dark' ? 'light' : 'dark', true));
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => { if (!localStorage.getItem('theme')) setTheme(e.matches ? 'dark' : 'light', false); });
+function syncTheme() {       // from the stored choice (or the system) to the page; also after another tab changed it
+  const pinned = pinnedTheme();
+  $('meta[name=color-scheme]').content = pinned || 'light dark';
+  const th = pinned || (sysDark.matches ? 'dark' : 'light');
+  if (th !== theme()) setTheme(th);
+}
+$('#btn-theme').addEventListener('click', () => {
+  const target = theme() === 'dark' ? 'light' : 'dark';
+  if (target === (sysDark.matches ? 'dark' : 'light')) ls.del('theme'); else ls.set('theme', target);
+  syncTheme();
+});
+sysDark.addEventListener('change', syncTheme);
+addEventListener('storage', e => { if (e.key === 'theme' || e.key === null) syncTheme(); });
 
 // ───────────────────────────────────────────────────────────── geolocation
 function locate() {
@@ -1282,7 +1312,7 @@ async function sendShare(lines) {
 }
 /** Typical gap between services, in minutes: the middle half of the gaps of the busiest direction, rounded to 5. */
 function headwayText(directions) {
-  const g = directions.slice().sort((x, y) => y.trips.length - x.trips.length)[0];
+  const g = directions.toSorted((x, y) => y.trips.length - x.trips.length)[0];
   if (!g || g.trips.length < 4) return '';
   const deps = g.trips.map(x => x.dep).sort((x, y) => x - y);
   const gaps = deps.slice(1).map((x, i) => (x - deps[i]) / 60).filter(m => m > 0).sort((x, y) => x - y);
@@ -1357,7 +1387,7 @@ document.addEventListener('click', ev => {
     case 'clear-agency': S.filters.agencies.delete(d.id); if (!S.filters.agencies.size) S.filters.agencies = null; filtersChanged(); break;
     case 'mode': toggleMode(d.mode); filtersChanged(); break;
     case 'lang': setLang(d.lang, true); closeLangMenu(); break;
-    case 'mapstyle': S.mapStyle = d.style; localStorage.setItem('mapStyle', d.style); applyBasemap(); renderLive(); break;
+    case 'mapstyle': S.mapStyle = d.style; ls.set('mapStyle', d.style); applyBasemap(); renderLive(); break;
     case 'install': if (deferredInstall) { deferredInstall.prompt(); deferredInstall.userChoice.finally(() => { deferredInstall = null; if (S.view.name === 'info') render(); }); } break;
     case 'ag-all': S.filters.agencies = null; filtersChanged(); break;
     case 'ag-none': S.filters.agencies = new Set(); filtersChanged(); break;
@@ -1416,30 +1446,36 @@ $('#tabs').addEventListener('wheel', e => {
   if (e.deltaY && !e.deltaX) { e.preventDefault(); e.currentTarget.scrollLeft += e.deltaY; }
 }, { passive: false });
 
-// drag handle to resize the side panel (desktop)
+// drag handle to resize the side panel (desktop): a window splitter, operated with the pointer or the arrow keys
 (function () {
-  const root = document.documentElement, handle = $('#resizer');
-  const saved = +localStorage.getItem('panelW');
-  if (saved >= 300) root.style.setProperty('--panel-w', saved + 'px');
-  let drag = false;
-  const move = e => {
-    if (!drag) return;
-    const x = (e.touches ? e.touches[0].clientX : e.clientX);
-    const w = Math.min(Math.max(x, 300), Math.min(900, window.innerWidth - 200));
+  const PANEL_MIN = 300, root = document.documentElement, handle = $('#resizer');
+  const panelMax = () => Math.min(900, window.innerWidth - 200);
+  const clampW = w => Math.min(Math.max(w, PANEL_MIN), panelMax());
+  const setW = (w, save) => {
+    w = Math.round(clampW(w));
     root.style.setProperty('--panel-w', w + 'px');
-    localStorage.setItem('panelW', Math.round(w));
+    handle.setAttribute('aria-valuenow', w); handle.setAttribute('aria-valuemax', panelMax());
+    if (save) ls.set('panelW', w);
     map.invalidateSize();
   };
-  const stop = () => { drag = false; document.body.classList.remove('resizing'); map.invalidateSize(); };
-  handle.addEventListener('mousedown', e => { drag = true; document.body.classList.add('resizing'); e.preventDefault(); });
-  handle.addEventListener('touchstart', () => { drag = true; document.body.classList.add('resizing'); }, { passive: true });
-  window.addEventListener('mousemove', move); window.addEventListener('touchmove', move, { passive: true });
-  window.addEventListener('mouseup', stop); window.addEventListener('touchend', stop);
-  handle.addEventListener('dblclick', () => { root.style.removeProperty('--panel-w'); localStorage.removeItem('panelW'); map.invalidateSize(); });
+  handle.setAttribute('aria-valuemin', PANEL_MIN);
+  const saved = +ls.get('panelW');
+  if (saved >= PANEL_MIN) setW(saved); else { handle.setAttribute('aria-valuemax', panelMax()); handle.setAttribute('aria-valuenow', $('#panel').offsetWidth); }
+  let drag = false;
+  handle.addEventListener('pointerdown', e => {
+    drag = true; handle.setPointerCapture(e.pointerId); document.body.classList.add('resizing'); e.preventDefault();
+  });
+  handle.addEventListener('pointermove', e => { if (drag) setW(e.clientX, true); });
+  const stop = () => { if (!drag) return; drag = false; document.body.classList.remove('resizing'); map.invalidateSize(); };
+  handle.addEventListener('pointerup', stop); handle.addEventListener('pointercancel', stop);
+  handle.addEventListener('dblclick', () => {
+    root.style.removeProperty('--panel-w'); ls.del('panelW'); map.invalidateSize();
+    handle.setAttribute('aria-valuenow', $('#panel').offsetWidth);
+  });
   handle.addEventListener('keydown', e => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-    const w = $('#panel').offsetWidth + (e.key === 'ArrowRight' ? 30 : -30);
-    root.style.setProperty('--panel-w', Math.min(Math.max(w, 300), 900) + 'px'); localStorage.setItem('panelW', w); map.invalidateSize();
+    e.preventDefault();
+    setW($('#panel').offsetWidth + (e.key === 'ArrowRight' ? 30 : -30), true);
   });
 })();
 

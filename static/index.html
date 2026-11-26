@@ -6,7 +6,7 @@
 <title>Mugitu: Euskal Herriko garraio publikoa zuzenean</title>
 <meta name="description" content="Autobus, tren, metro eta tranbien posizioak eta hurrengo irteerak zuzenean Euskal Herri osoan, datu irekietatik.">
 <meta name="color-scheme" content="light dark">
-<script>/* set the theme before first paint */(function(){var d=document.documentElement;try{d.dataset.theme=localStorage.getItem("theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")}catch(e){d.dataset.theme="light"}})()</script>
+<script>/* set the theme before first paint: the pinned choice, else the system's */(function(){var d=document.documentElement,p=null;try{p=localStorage.getItem("theme")}catch(e){}if(p!=="light"&&p!=="dark")p=null;if(p)document.querySelector('meta[name="color-scheme"]').content=p;d.dataset.theme=p||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")})()</script>
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1a1d21" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
@@ -19,42 +19,50 @@
 <meta name="apple-mobile-web-app-title" content="Mugitu">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="format-detection" content="telephone=no">
+<link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
 <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
 <link rel="stylesheet" href="style.css">
 <!-- Privacy-friendly analytics by Plausible -->
 <script async src="https://plausible.josulo.eu/js/pa-Oqyp0RrWXiNO7POFLf38K.js"></script>
+<script defer src="vendor/leaflet/leaflet.js"></script>
+<script defer src="vendor/maplibre/maplibre-gl.js"></script>
+<script defer src="vendor/maplibre/leaflet-maplibre-gl.js"></script>
+<script defer src="i18n.js"></script>
+<script defer src="app.js"></script>
 <script>
   window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
   plausible.init()
 </script>
 </head>
 <body>
+<a class="skip-link visually-hidden" href="#layout" data-i18n="skip">Skip to content</a>
 <header id="topbar">
+  <h1 class="visually-hidden" data-i18n="app_title">Mugitu: Euskal Herriko garraio publikoa zuzenean</h1>
   <a class="brand" href="/" aria-label="Mugitu"><img class="logo" src="icon.svg" width="32" height="32" alt=""><span class="brand-name">Mugitu</span></a>
-  <div class="searchbox">
+  <search class="searchbox">
     <span id="search-ic" class="search-ic" aria-hidden="true"></span>
     <input id="q" type="search" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search stop, line or operator" data-i18n-ph="search_ph">
     <ul id="suggest" class="suggest" hidden></ul>
-  </div>
+  </search>
   <button id="btn-locate" type="button" class="icon-btn" data-i18n-title="nearby" title="Nearby stops" aria-label="Nearby stops"></button>
   <div class="quick">
     <div class="lang-wrap">
-      <button id="btn-lang" type="button" class="icon-btn" aria-haspopup="true" aria-expanded="false" aria-controls="lang-menu"></button>
+      <button id="btn-lang" type="button" class="icon-btn" aria-expanded="false" aria-controls="lang-menu"></button>
       <ul id="lang-menu" class="menu" hidden>
-        <li><button type="button" lang="eu" data-act="lang" data-lang="eu" aria-checked="false">Euskara</button></li>
-        <li><button type="button" lang="es" data-act="lang" data-lang="es" aria-checked="false">Español</button></li>
-        <li><button type="button" lang="fr" data-act="lang" data-lang="fr" aria-checked="false">Français</button></li>
-        <li><button type="button" lang="en" data-act="lang" data-lang="en" aria-checked="false">English</button></li>
+        <li><button type="button" lang="eu" data-act="lang" data-lang="eu">Euskara</button></li>
+        <li><button type="button" lang="es" data-act="lang" data-lang="es">Español</button></li>
+        <li><button type="button" lang="fr" data-act="lang" data-lang="fr">Français</button></li>
+        <li><button type="button" lang="en" data-act="lang" data-lang="en">English</button></li>
       </ul>
     </div>
     <button id="btn-theme" type="button" class="icon-btn"></button>
   </div>
 </header>
 
-<main id="layout">
+<main id="layout" tabindex="-1">
   <section id="panel">
-    <nav id="tabs" aria-label="Sections">
+    <nav id="tabs" aria-label="Sections" data-i18n-aria="sections_label">
       <button type="button" data-tab="stops" data-ic="pin" class="active" aria-current="page"><span class="tab-ic"></span><span data-i18n="tab_stops">Geltokiak</span></button>
       <button type="button" data-tab="lines" data-ic="route"><span class="tab-ic"></span><span data-i18n="tab_lines">Lineak</span></button>
       <button type="button" data-tab="alerts" data-ic="warn"><span class="tab-ic"></span><span data-i18n="tab_alerts">Abisuak</span><span id="alert-count" class="badge" hidden></span></button>
@@ -66,18 +74,13 @@
       <div id="panel-body"></div>
     </div>
   </section>
-  <div id="resizer" role="separator" aria-orientation="vertical" aria-label="Resize panel" tabindex="0"></div>
+  <div id="resizer" role="separator" aria-orientation="vertical" aria-label="Resize panel" data-i18n-aria="resize_label" tabindex="0"></div>
   <section id="mapwrap">
-    <div id="map" role="application" aria-label="Map"></div>
+    <div id="map" role="application" aria-label="Map" data-i18n-aria="map_label"></div>
     <div id="mapfilter" class="mapfilter"></div>
     <div id="map-toast" class="toast" role="status" hidden></div>
   </section>
 </main>
 
-<script src="vendor/leaflet/leaflet.js"></script>
-<script src="vendor/maplibre/maplibre-gl.js"></script>
-<script src="vendor/maplibre/leaflet-maplibre-gl.js"></script>
-<script src="i18n.js"></script>
-<script src="app.js"></script>
 </body>
 </html>

@@ -136,8 +136,30 @@ index (`data-index.json`) reports a newer timetable. Real-time `.pb` feeds are f
 `index.html` is rendered by the server: every local css / js / image / manifest it references gets
 `?v=<hash of the file's content>`, so a changed file gets a new URL and browsers fetch it again. Versioned URLs are
 served `Cache-Control: public, max-age=31536000, immutable`; `index.html`, `sw.js` and any URL without the current
-hash are always revalidated (ETag, `304 Not Modified` when unchanged); `/api/*` is `no-store`. Nothing to do on
-deploy, the hashes are computed from the files at run time. The service worker keeps only the newest version of each file.
+hash are always revalidated (ETag, `304 Not Modified` when unchanged); `/api/*` is `no-cache` (not `no-store`, which
+would keep the page out of the back/forward cache). Nothing to do on deploy, the hashes are computed from the files at
+run time. The service worker serves versioned files cache first (they never go stale; instant and offline) and
+everything else network first, and keeps only the newest version of each file.
+
+## Security headers
+
+Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`,
+`Permissions-Policy` (only geolocation, for "nearby stops"), `X-Frame-Options: DENY` and
+`Cross-Origin-Opener-Policy: same-origin`; `/api/*` also `Cross-Origin-Resource-Policy: same-origin`, and
+`Strict-Transport-Security` when the reverse proxy says the request was HTTPS (`X-Forwarded-Proto`).
+
+The page has a Content-Security-Policy built when `index.html` is rendered (`server.csp_for`): scripts only from this
+origin, the external scripts the page itself loads (analytics) and its inline scripts **by hash**, so editing an
+inline script needs no change; styles only as attributes, no `<style>` blocks; images and requests only to this origin,
+OpenFreeMap and OpenStreetMap tiles; workers from `blob:` (MapLibre); no framing; no plugins. If you add another
+external host (a tile server, an API) add it to `MAP_HOSTS` / `RASTER_HOSTS` in `server.py`, or the browser blocks it
+(the console shows the violation).
+
+## Colour scheme
+
+The page follows the system's light/dark setting. The theme button pins `light` or `dark` only when that differs
+from the system; pressing it again returns to "follow the system" (nothing stored). The choice is mirrored in
+`<meta name="color-scheme">` and applied before first paint by a small inline script in `index.html`.
 
 ## Map
 
