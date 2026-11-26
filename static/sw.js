@@ -1,6 +1,6 @@
 'use strict';
 /* App-shell cache. The shell loads offline; live data (/api/*) and map tiles always go to the network. */
-const CACHE = 'eh-shell-v3';
+const CACHE = 'eh-shell-v6';
 const SHELL = [
   '/', '/index.html', '/style.css', '/app.js', '/i18n.js', '/manifest.webmanifest',
   '/icon.svg', '/icon-192.png', '/icon-512.png',

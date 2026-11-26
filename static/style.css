@@ -391,3 +391,9 @@ h3.region.hourh { position: sticky; top: -1px; background: var(--bg); padding: v
 @media (hover: hover) { .tchip:hover { border-color: var(--ink); } }
 .vclu .cl.mix { background: #3d444d; color: #fcfbf9; }
 :root[data-theme="dark"] .vclu .cl.mix { color: var(--text); }
+/* share mode: pick a contiguous range of stops / departures, then hand it to the native share sheet */
+.sharebar { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-3) calc(-1 * var(--sp-4)) 0; padding: var(--sp-3) var(--sp-4) calc(var(--sp-3) + env(safe-area-inset-bottom, 0px)); background: var(--surface); border-top: 1px solid var(--line); }
+.dep.sel, .tl li.sel { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--ink); }
+.dep.out, .tl li.out { opacity: .4; }
+.btn[aria-pressed="true"] { border-color: var(--ink); }
+.btn.icon-only .ic { margin-right: 0; }

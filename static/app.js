@@ -30,6 +30,7 @@ const ICONS = {
   search: P('M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z'),
   link: P('M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z'),
   car: P('M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4zm0 12.2c-2.1 0-3.9-1.1-5-2.7.03-1.65 3.3-2.55 5-2.55s4.97.9 5 2.55c-1.1 1.6-2.9 2.7-5 2.7z'),
+  share: P('M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z'),
   person: P('M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'),
 };
 const ic = (name, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">${ICONS[name] || ''}</svg>`;
@@ -590,7 +591,7 @@ function applyDate(date) {
   if (v.name === 'station') {
     if (date && r && date === r.today) date = null;
     if ((date || null) === (v.date || null)) return renderDateUi();
-    v.date = date; v.lineSel = null; v.scroll = null; v.scrolled = false; v.data = null; render();
+    v.date = date; v.share = null; v.lineSel = null; v.scroll = null; v.scrolled = false; v.data = null; render();
   } else { v.date = date; drawRouteTT(); }
 }
 function renderDateUi() { if (S.view.name === 'station' && S.view.data) drawStationHeader($('#panel-body')); else if (S.view.name === 'route') drawRouteTT(); }
@@ -652,6 +653,7 @@ function setHash() {
   const v = S.view;
   let h = '';
   if (v.name === 'station') h = '#s=' + encodeURIComponent(v.agency + '|' + v.id + (v.date ? '|' + v.date : ''));
+  else if (v.name === 'route') h = '#r=' + encodeURIComponent(v.agency + '|' + v.route);
   else if (v.name === 'trip') h = '#t=' + encodeURIComponent(v.agency + '|' + v.trip + (v.sched && v.date ? '|' + v.date : ''));
   history.replaceState(null, '', h || location.pathname);
 }
@@ -738,22 +740,25 @@ function drawStationHeader(body) {
   const fav = isFav(st.agency, st.station_id);
   let h = `<div class="row" style="margin-bottom:8px">${backBtn()}<div class="grow"></div>
     <button type="button" class="btn small" data-act="focus-stn">${ic('target')}${t('on_map')}</button>
+    <button type="button" class="btn small icon-only" data-act="share-start" aria-pressed="${!!v0.share}" title="${t('share')}" aria-label="${t('share')}">${ic('share')}</button>
     <button type="button" class="star" data-act="fav" title="${fav ? t('remove_fav') : t('add_fav')}" aria-label="${fav ? t('remove_fav') : t('add_fav')}">${ic(fav ? 'star' : 'starO')}</button></div>
     <div class="row" style="margin-bottom:8px"><span class="mode-ic lg">${modeIcons(st.modes)}</span>
       <div class="grow"><div class="title">${esc(st.name)}</div><div class="muted small">${esc(st.agency_name)}</div></div></div>`;
   h += dateBar(S.view);
   if (d.date) {
     h += schedList(d);
+    if (v0.share) h += shareBar();
     const keep = body.scrollTop;
-    body.innerHTML = h; body.scrollTop = keep;
+    body.innerHTML = h; body.scrollTop = keep; paintShare();
     return;
   }
   h += lineChips(v0.chipItems, v0.lineSel);
   h += `<div id="dep-list">${depList(d)}</div>`;
   if ((d.alerts || []).length) h += `<details class="alerts-fold"><summary>${ic('warn')}${t('tab_alerts')} (${d.alerts.length})</summary>${d.alerts.map(a => alertCard(a, true)).join('')}</details>`;
   h += refreshRow(`${t('updated_lbl')} ${clockS(d.time)}`);
+  if (v0.share) h += shareBar();
   const keep = body.scrollTop;
-  body.innerHTML = h; body.scrollTop = keep;
+  body.innerHTML = h; body.scrollTop = keep; paintShare();
 }
 /** Full-day theoretical timetable of a station: line filter + calls grouped by hour. */
 const lineKey = it => it.agency + '|' + it.route_id;
@@ -783,12 +788,12 @@ function schedList(d) {
   if (!items.length) return h + `<div class="empty">${t('no_service_date')}</div>`;
   h += `<div class="small muted" style="margin:8px 0 2px">${t('services_n').replace('{n}', items.length)}</div>`;
   const now = nowTs(); let hour = null, marked = false;
-  for (const it of items) {
+  for (const [i, it] of items.entries()) {
     const hh = clock(it.sched).slice(0, 2);
     if (hh !== hour) { hour = hh; h += `<h3 class="region hourh">${hh}:00</h3>`; }
     const up = !marked && it.sched >= now && d.date === dateToYmd(new Date());
     if (up) marked = true;
-    h += `<div class="dep" ${up ? 'id="upcoming" ' : ''}data-act="trip" data-sched="1" data-agency="${esc(it.agency)}" data-trip="${esc(it.trip_id)}" data-date="${esc(it.date)}">
+    h += `<div class="dep" ${up ? 'id="upcoming" ' : ''}${v.share ? `data-act="share-pick" data-i="${i}"` : 'data-act="trip"'} data-sched="1" data-agency="${esc(it.agency)}" data-trip="${esc(it.trip_id)}" data-date="${esc(it.date)}">
       ${badge(it)}<div class="grow"><div class="dest ellipsis">${esc(it.headsign || it.line)}</div></div>
       <div class="when"><div class="big">${clock(it.sched)}</div></div></div>`;
   }
@@ -801,7 +806,8 @@ function scrollToUpcoming(body) {
 function depList(d) {
   if (!d.items.length) return `<div class="empty">${t('no_deps')}</div>`;
   const now = nowTs();
-  return d.items.map(it => {
+  const sharing = S.view.name === 'station' && S.view.share;
+  return d.items.map((it, i) => {
     const mins = Math.round((it.expected - now) / 60);
     const big = mins < 1 ? t('now') : mins < 60 ? mins + ' ' + t('min') : clock(it.expected);
     const late = it.delay >= 300;
@@ -814,7 +820,7 @@ function depList(d) {
     tag += flagTags(it.flags);
     if (it.occupancy != null) tag += occChip(it.occupancy);
     const second = mins < 60 && mins >= 1 ? `<div class="muted small">${clock(it.expected)}</div>` : (Math.abs(it.delay) >= 60 ? `<div class="muted small">${t('sched_short')} ${clock(it.sched)}</div>` : '');
-    return `<div class="dep${it.cancelled ? ' cancelled' : ''}" data-act="trip" data-agency="${esc(it.agency || S.view.agency)}" data-trip="${esc(it.trip_id)}" data-date="${esc(it.date)}">
+    return `<div class="dep${it.cancelled ? ' cancelled' : ''}" ${sharing ? `data-act="share-pick" data-i="${i}"` : 'data-act="trip"'} data-agency="${esc(it.agency || S.view.agency)}" data-trip="${esc(it.trip_id)}" data-date="${esc(it.date)}">
       ${badge(it)}<div class="grow"><div class="dest ellipsis">${esc(it.headsign || it.line)}</div><div class="tags">${tag}</div></div>
       <div class="when"><div class="big${mins < 3 && !it.cancelled ? ' soon' : ''}">${big}</div>${second}</div></div>`;
   }).join('');
@@ -888,7 +894,8 @@ async function renderTrip(body) {
     const c = colors(d);
     const idx = sched ? -2 : d.stops.findIndex(s => s.expected >= now - 30);
     let h = `<div class="row" style="margin-bottom:8px">${backBtn()}<div class="grow"></div>
-      <button type="button" class="btn small" data-act="route" data-agency="${esc(d.agency)}" data-route="${esc(d.route_id)}">${ic('route')}${t('route_on_map')}</button></div>
+      <button type="button" class="btn small" data-act="route" data-agency="${esc(d.agency)}" data-route="${esc(d.route_id)}">${ic('route')}${t('route_on_map')}</button>
+      <button type="button" class="btn small icon-only" data-act="share-start" aria-pressed="${!!v.share}" title="${t('share')}" aria-label="${t('share')}">${ic('share')}</button></div>
       <div class="row" style="margin-bottom:6px">${badge(d)}<div class="grow"><div class="title">${esc(d.headsign)}</div><div class="muted small">${esc(agName(d.agency))}${sched ? ' · ' + esc(ymdLong(d.date)) : ''}</div></div></div>
       ${sched ? '' : vehCard(v)}`;
     if (sched) h += d.runs ? '' : `<div class="notice warn small">${t('trip_not_running')}</div>`;
@@ -897,13 +904,14 @@ async function renderTrip(body) {
     h += `<ul class="tl" style="--c:${c.bg}">` + d.stops.map((s, i) => {
       const dl = s.expected - s.sched;
       const cls = (sched ? '' : (i < idx || idx < 0 ? 'past' : '') + (i === idx ? ' here' : '')) + (s.skipped ? ' skipped' : '');
-      return `<li class="${cls}" data-act="station" data-agency="${esc(d.agency)}" data-id="${esc(s.station_id)}" data-lat="${s.lat}" data-lon="${s.lon}">
+      return `<li class="${cls}" ${v.share ? `data-act="share-pick" data-i="${i}"` : 'data-act="station"'} data-agency="${esc(d.agency)}" data-id="${esc(s.station_id)}" data-lat="${s.lat}" data-lon="${s.lon}">
         <div class="grow nm">${esc(s.name)}</div>
         <div class="tm"><b>${clock(s.expected)}</b>${Math.abs(dl) >= 60 ? `<div class="small ${dl >= 300 ? 'late' : 'muted'}">${t('sched_short')} ${clock(s.sched)}</div>` : ''}</div></li>`;
     }).join('') + '</ul>';
     if (!sched) h += refreshRow(`${t('updated_lbl')} ${clockS(now)}`);
+    if (v.share) h += shareBar();
     const keep = body.scrollTop;
-    body.innerHTML = h; body.scrollTop = keep;
+    body.innerHTML = h; body.scrollTop = keep; paintShare();
     // a live vehicle keeps the user's own zoom and position; only a scheduled trip is framed
     drawTripOnMap(d, idx, !v.fitted && !veh && !v.vid); v.fitted = true;
     setFocus({ agency: d.agency, trip_id: sched ? '' : d.trip_id });   // a timetable for another date shows no live vehicles
@@ -996,7 +1004,8 @@ async function renderRoute(body) {
     const c = colors(d);
     const isOnly = S.filters.line && S.filters.line.agency === v.agency && S.filters.line.route_id === v.route;
     let h = `<div class="row" style="margin-bottom:8px">${backBtn()}<div class="grow"></div>
-      <button type="button" class="btn small${isOnly ? ' primary' : ''}" data-act="${isOnly ? 'clear-line' : 'only-line'}" data-agency="${esc(v.agency)}" data-route="${esc(v.route)}" data-line="${esc(d.line)}">${isOnly ? t('clear_filter') : t('only_line')}</button></div>
+      <button type="button" class="btn small${isOnly ? ' primary' : ''}" data-act="${isOnly ? 'clear-line' : 'only-line'}" data-agency="${esc(v.agency)}" data-route="${esc(v.route)}" data-line="${esc(d.line)}">${isOnly ? t('clear_filter') : t('only_line')}</button>
+      <button type="button" class="btn small icon-only" data-act="share-line" title="${t('share')}" aria-label="${t('share')}">${ic('share')}</button></div>
       <div class="row" style="margin-bottom:8px">${badge(d)}<div class="grow"><div class="title">${esc(d.long || d.line)}</div><div class="muted small">${esc(agName(v.agency))}</div></div></div>`;
     const live = S.vehicles.filter(x => x.agency === v.agency && x.route_id === v.route).length;
     h += `<div class="notice ${live ? 'ok' : ''} small">${live ? `${live} ${t('live_vehicles')}` : t('no_rt')}</div><div id="route-tt"></div>`;
@@ -1036,7 +1045,7 @@ async function drawRouteTT() {
       if (v.date !== v.range.today) { v.date = v.range.today; return drawRouteTT(); }
       $('#route-tt-body').innerHTML = `<div class="empty">${t('no_service_date')}</div>`; return;
     }
-    v.range = d.range;
+    v.range = d.range; v.sched = d;
     const c = colors(v.data);
     let h = '';
     if (!d.directions.length) h += `<div class="empty">${t('no_service_date')}</div>`;
@@ -1183,6 +1192,127 @@ function locate() {
   }, () => toast(t('loc_denied')), { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 });
 }
 
+// ───────────────────────────────────────────────────────────── share (Web Share API → native Android/iOS share sheet)
+/** Nearest coloured-square emoji for a line colour (#rrggbb), so a shared line keeps its identity in plain text. */
+function colorEmoji(hex) {
+  const n = parseInt(hex.slice(1), 16), r = (n >> 16) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, dl = mx - mn;
+  const sat = dl === 0 ? 0 : dl / (1 - Math.abs(2 * l - 1));
+  if (l < .13) return '⬛';
+  if (l > .88) return '⬜';
+  if (sat < .15) return l > .6 ? '⬜' : '⬛';
+  let h = dl === 0 ? 0 : mx === r ? ((g - b) / dl) % 6 : mx === g ? (b - r) / dl + 2 : (r - g) / dl + 4;
+  h = (h * 60 + 360) % 360;
+  if (h < 15 || h >= 335) return '🟥';
+  if (h < 40) return l < .38 ? '🟫' : '🟧';
+  if (h < 70) return '🟨';
+  if (h < 170) return '🟩';
+  if (h < 260) return '🟦';
+  return '🟪';
+}
+/** What a station share offers: the lines the list currently shows (live: filtered by the server; timetable: filtered here). */
+function shareItems(v) {
+  const d = v.data; if (!d) return [];
+  return d.date && v.lineSel && v.lineSel.size ? d.items.filter(it => v.lineSel.has(lineKey(it))) : d.items;
+}
+const shareCount = v => v.name === 'trip' ? (v.data ? v.data.stops.length : 0) : shareItems(v).length;
+function shareRange(v) {
+  const n = shareCount(v), s = v.share;
+  return [Math.max(0, s.a == null ? 0 : s.a), Math.min(n - 1, s.b == null ? n - 1 : s.b)];
+}
+const shareBar = () => `<div class="sharebar" id="sharebar"><span class="grow small" id="share-info"></span>
+  <button type="button" class="btn small" data-act="share-cancel">${t('cancel')}</button>
+  <button type="button" class="btn small primary icon-only" data-act="share-go" title="${t('share')}" aria-label="${t('share')}">${ic('share')}</button></div>`;
+function toggleShare(on) {
+  const v = S.view;
+  if (on === undefined) on = !v.share;
+  if (!on) v.share = null;
+  else {
+    if (v.name === 'trip' && v.data && !v.data.sched_only) {      // a live trip starts at the next stop
+      const i = v.data.stops.findIndex(s => s.expected >= nowTs() - 30);
+      v.share = { a: Math.max(i, 0), b: null, anchor: null };
+    } else v.share = { a: null, b: null, anchor: null };
+  }
+  if (v.name === 'trip') render(); else drawStationHeader($('#panel-body'));
+}
+/** Two taps pick a contiguous range: first and last item (in either order). */
+function pickShare(i) {
+  const s = S.view.share; if (!s) return;
+  if (s.anchor == null) { s.a = s.b = i; s.anchor = i; }
+  else { s.a = Math.min(s.anchor, i); s.b = Math.max(s.anchor, i); s.anchor = null; }
+  paintShare();
+}
+function paintShare() {
+  const v = S.view, s = v.share; if (!s) return;
+  const [a, b] = shareRange(v);
+  $$('#panel-body [data-i]').forEach(el => { const i = +el.dataset.i, on = i >= a && i <= b; el.classList.toggle('sel', on); el.classList.toggle('out', !on); });
+  const info = $('#share-info');
+  if (info) info.textContent = s.anchor != null ? t(v.name === 'trip' ? 'share_pick_end_stop' : 'share_pick_end') : t(v.name === 'trip' ? 'share_stops_n' : 'share_deps_n').replace('{n}', Math.max(0, b - a + 1));
+}
+function tripShareText(d, a, b) {
+  const stops = d.stops.slice(a, b + 1).filter(s => !s.skipped);
+  const lines = [`${colorEmoji(colors(d).bg)} ${d.line || ''} → ${d.headsign || ''}`.trim(), agName(d.agency) + (d.sched_only && d.date ? ' · ' + ymdMedium(d.date) : '')];
+  stops.forEach(s => lines.push(`📍 ${clock(s.expected)} ${s.name}`));
+  return lines;
+}
+function stationShareText(v, a, b) {
+  const st = v.data.station, d = v.data;
+  const lines = [`🚏 ${st.name}`, st.agency_name + (d.date ? ' · ' + ymdMedium(d.date) : '')];
+  shareItems(v).slice(a, b + 1).forEach(it => {
+    const when = it.cancelled ? '❌' : clock(d.date ? it.sched : it.expected);
+    lines.push(`${colorEmoji(colors(it).bg)} ${it.line} · ${it.headsign || ''} ${when}`.replace(/ {2,}/g, ' '));
+  });
+  return lines;
+}
+async function doShare() {
+  const v = S.view; if (!v.share || !v.data) return;
+  const [a, b] = shareRange(v);
+  if (b < a) return;
+  sendShare(v.name === 'trip' ? tripShareText(v.data, a, b) : stationShareText(v, a, b));
+}
+/** Hands the text lines (+ a link to the current view) to the native share sheet, or copies them. */
+async function sendShare(lines) {
+  const url = location.origin + location.pathname + location.hash;
+  const text = lines.join('\n') + '\n🔗 ' + url;
+  try {
+    if (navigator.share) { await navigator.share({ title: lines[0], text }); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(text); toast(t('share_copied')); }
+  catch (e) { toast(t('error')); }
+}
+/** Typical gap between services, in minutes: the middle half of the gaps of the busiest direction, rounded to 5. */
+function headwayText(directions) {
+  const g = directions.slice().sort((x, y) => y.trips.length - x.trips.length)[0];
+  if (!g || g.trips.length < 4) return '';
+  const deps = g.trips.map(x => x.dep).sort((x, y) => x - y);
+  const gaps = deps.slice(1).map((x, i) => (x - deps[i]) / 60).filter(m => m > 0).sort((x, y) => x - y);
+  if (!gaps.length) return '';
+  const q = p => gaps[Math.min(gaps.length - 1, Math.floor(p * (gaps.length - 1)))];
+  const r = m => m < 10 ? Math.round(m) : Math.round(m / 5) * 5;
+  const lo = r(q(.25)), hi = r(q(.75));
+  if (!lo) return '';
+  return (lo === hi ? t('share_every').replace('{n}', lo) : t('share_every').replace('{n}', lo + '–' + hi));
+}
+function lineShareText(v) {
+  const d = v.data, sc = v.sched;
+  const lines = [`${colorEmoji(colors(d).bg)} ${d.line || ''}${d.long && d.long !== d.line ? ' · ' + d.long : ''}`.trim(), agName(v.agency)];
+  const sh = d.shapes || [];
+  if (sh[0] && sh[0].stops.length > 1) {
+    const f = sh[0].stops[0].name, l = sh[0].stops[sh[0].stops.length - 1].name;
+    lines.push(`📍 ${f}`, `🏁 ${l}`);
+  }
+  const all = sc && !sc.error ? sc.directions.flatMap(g => g.trips.map(x => x.dep)) : [];
+  if (all.length) {
+    const hw = headwayText(sc.directions);
+    const day = sc.date && sc.date !== (v.range && v.range.today) ? ' (' + ymdMedium(sc.date) + ')' : '';
+    lines.push(`🕕 ${clock(Math.min(...all))} – ${clock(Math.max(...all))}${hw ? ' · ' + hw : ''}${day}`);
+  }
+  return lines;
+}
+function shareLine() {
+  const v = S.view; if (v.name !== 'route' || !v.data) return;
+  sendShare(lineShareText(v));
+}
 // ───────────────────────────────────────────────────────────── events
 document.addEventListener('click', ev => {
   const el = ev.target.closest('[data-act]'); if (!el) return;
@@ -1202,9 +1332,15 @@ document.addEventListener('click', ev => {
     case 'date-pick': { const i = $('input[data-act=date-set]'); if (i) { try { i.showPicker(); } catch (e) { i.focus(); i.click(); } } break; }
     case 'line-filter':
       toggleLine(S.view, d.key);
+      if (S.view.share) S.view.share = { a: null, b: null, anchor: null };
       if (S.view.date) drawStationHeader($('#panel-body')); else render();      // live: the server filters, so ask again
       break;
     case 'route': openRoute(d.agency, d.route); break;
+    case 'share-start': toggleShare(); break;
+    case 'share-pick': pickShare(+d.i); break;
+    case 'share-cancel': toggleShare(false); break;
+    case 'share-go': doShare(); break;
+    case 'share-line': shareLine(); break;
     case 'back': S.hist.length ? history.back() : back(); break;
     case 'reload': render(); break;
     case 'fav': {
@@ -1264,13 +1400,14 @@ function refreshView() {
   if (document.hidden) return;
   if (n === 'station' && S.view.date) return;    // timetable of another date: nothing changes
   if (n === 'trip' && S.view.sched) return;
+  if (S.view.share) return;                      // keep the user's selection while choosing what to share
   if (n === 'station' || n === 'trip') render();
   else if (n === 'home' && S.favs.length) loadFavNext();
 }
 setInterval(pollVehicles, POLL_VEHICLES_MS);
 setInterval(refreshView, POLL_VIEW_MS);
 setInterval(() => { // keep countdowns ticking between fetches
-  if (S.view.name === 'station' && S.view.data && !S.view.date && !document.hidden) { const l = $('#dep-list'); if (l) l.innerHTML = depList(S.view.data); }
+  if (S.view.name === 'station' && S.view.data && !S.view.date && !S.view.share && !document.hidden) { const l = $('#dep-list'); if (l) l.innerHTML = depList(S.view.data); }
 }, 10000);
 setInterval(loadAlerts, 120000);
 
@@ -1336,6 +1473,7 @@ async function boot() {
   if (new URLSearchParams(location.search).get('near') === '1') { history.replaceState(null, '', location.pathname); locate(); }
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => { /* not on https/localhost: fine */ });
   if (h.startsWith('s=')) { const [a, id, dt] = h.slice(2).split('|'); if (a && id) openStation(a, id, /^\d{8}$/.test(dt || '') ? dt : null); }
+  else if (h.startsWith('r=')) { const [a, id] = h.slice(2).split('|'); if (a && id) openRoute(a, id); }
   else if (h.startsWith('t=')) { const [a, id, dt] = h.slice(2).split('|'); if (a && id) openTrip(a, id, dt || '', !!dt); }
 }
 boot();

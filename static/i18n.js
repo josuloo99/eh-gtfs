@@ -41,6 +41,8 @@ const I18N = {
     map_style: 'Map style', style_simple: 'Simple', style_detailed: 'Detailed', theme_to_light: 'Switch to light mode', theme_to_dark: 'Switch to dark mode', vehicles_on_map: 'on the map', offline: 'No connection. Showing what was saved.', m: 'm',
     region_eus: 'Euskadi', region_nav: 'Navarre', region_ipar: 'Northern Basque Country', region_eh: 'All Euskal Herria', not_served: 'Stop not served', occupancy: 'Occupancy', occupancy_hint: 'Passengers on board (reported by Lurraldebus)', flag_drop_off_only: 'Drop-off only', flag_pick_up_only: 'Pick-up only',
     rt_lb_none: 'No live arrival data for this stop right now. Times shown are from the timetable.', src_arrivals: 'Stop arrivals', st_idle: 'on demand',
+    share: 'Share', cancel: 'Cancel', share_copied: 'Copied to clipboard', share_stops_n: '{n} stops · tap to change', share_deps_n: '{n} departures · tap to change', share_pick_end: 'Now tap the last departure', share_pick_end_stop: 'Now tap the last stop',
+    share_every: 'every {n} min',
   },
   es: {
     today: 'Hoy', prev_day: 'Día anterior', next_day: 'Día siguiente', date_label: 'Fecha', services_n: '{n} servicios', no_service_date: 'No hay servicios en esta fecha.', date_out_of_range: 'Esa fecha queda fuera del horario publicado.', date_range_hint: 'Disponible: del {a} al {b}', all_lines: 'Todas las líneas', trip_not_running: 'Este viaje no circula en esa fecha.',
@@ -83,6 +85,8 @@ const I18N = {
     map_style: 'Estilo del mapa', style_simple: 'Simple', style_detailed: 'Detallado', theme_to_light: 'Cambiar a modo claro', theme_to_dark: 'Cambiar a modo oscuro', vehicles_on_map: 'en el mapa', offline: 'Sin conexión. Se muestra lo guardado.', m: 'm',
     region_eus: 'Euskadi', region_nav: 'Navarra', region_ipar: 'Ipar Euskal Herria (País Vasco francés)', region_eh: 'Todo Euskal Herria', not_served: 'Parada sin servicio', occupancy: 'Ocupación', occupancy_hint: 'Pasajeros a bordo (según Lurraldebus)', flag_drop_off_only: 'Solo bajada', flag_pick_up_only: 'Solo subida',
     rt_lb_none: 'No hay datos de llegada en vivo para esta parada ahora mismo. Se muestran los horarios teóricos.', src_arrivals: 'Llegadas en parada', st_idle: 'bajo demanda',
+    share: 'Compartir', cancel: 'Cancelar', share_copied: 'Copiado al portapapeles', share_stops_n: '{n} paradas · toca para cambiar', share_deps_n: '{n} salidas · toca para cambiar', share_pick_end: 'Ahora toca la última salida', share_pick_end_stop: 'Ahora toca la última parada',
+    share_every: 'cada {n} min',
   },
   eu: {
     today: 'Gaur', prev_day: 'Aurreko eguna', next_day: 'Hurrengo eguna', date_label: 'Data', services_n: '{n} zerbitzu', no_service_date: 'Ez dago zerbitzurik data honetan.', date_out_of_range: 'Data hori argitaratutako ordutegitik kanpo dago.', date_range_hint: 'Eskuragarri: {a} – {b}', all_lines: 'Linea guztiak', trip_not_running: 'Bidaia hau ez dabil data horretan.',
@@ -125,6 +129,8 @@ const I18N = {
     map_style: 'Mapa estiloa', style_simple: 'Sinplea', style_detailed: 'Xehatua', theme_to_light: 'Aldatu modu argira', theme_to_dark: 'Aldatu modu ilunera', vehicles_on_map: 'mapan', offline: 'Konexiorik ez. Gordetakoa erakusten da.', m: 'm',
     region_eus: 'Euskadi', region_nav: 'Nafarroa', region_ipar: 'Ipar Euskal Herria', region_eh: 'Euskal Herria osoa', not_served: 'Geralekua ez da zerbitzatzen', occupancy: 'Okupazioa', occupancy_hint: 'Autobusean doazen bidaiariak (Lurraldebusen arabera)', flag_drop_off_only: 'Jaisteko soilik', flag_pick_up_only: 'Igotzeko soilik',
     rt_lb_none: 'Une honetan ez dago zuzeneko helduera daturik geralekurako. Ordutegi teorikoa erakusten da.', src_arrivals: 'Geralekuko helduerak', st_idle: 'eskatzean',
+    share: 'Partekatu', cancel: 'Utzi', share_copied: 'Arbelera kopiatu da', share_stops_n: '{n} geltoki · ukitu aldatzeko', share_deps_n: '{n} irteera · ukitu aldatzeko', share_pick_end: 'Orain ukitu azken irteera', share_pick_end_stop: 'Orain ukitu azken geltokia',
+    share_every: '{n} minuturo',
   },
   fr: {
     today: 'Aujourd’hui', prev_day: 'Jour précédent', next_day: 'Jour suivant', date_label: 'Date', services_n: '{n} services', no_service_date: 'Aucun service à cette date.', date_out_of_range: 'Cette date est hors des horaires publiés.', date_range_hint: 'Disponible : du {a} au {b}', all_lines: 'Toutes les lignes', trip_not_running: 'Ce trajet ne circule pas à cette date.',
@@ -167,5 +173,7 @@ const I18N = {
     map_style: 'Style de carte', style_simple: 'Simple', style_detailed: 'Détaillé', theme_to_light: 'Passer en mode clair', theme_to_dark: 'Passer en mode sombre', vehicles_on_map: 'sur la carte', offline: 'Pas de connexion. Affichage des données enregistrées.', m: 'm',
     region_eus: 'Euskadi', region_nav: 'Navarre', region_ipar: 'Pays Basque Nord (Ipar Euskal Herria)', region_eh: 'Tout Euskal Herria', not_served: 'Arrêt non desservi', occupancy: 'Occupation', occupancy_hint: 'Passagers à bord (selon Lurraldebus)', flag_drop_off_only: 'Descente uniquement', flag_pick_up_only: 'Montée uniquement',
     rt_lb_none: 'Pas de données d’arrivée en direct pour cet arrêt pour le moment. Les horaires affichés sont théoriques.', src_arrivals: 'Arrivées à l’arrêt', st_idle: 'à la demande',
+    share: 'Partager', cancel: 'Annuler', share_copied: 'Copié dans le presse-papiers', share_stops_n: '{n} arrêts · touchez pour modifier', share_deps_n: '{n} départs · touchez pour modifier', share_pick_end: 'Touchez maintenant le dernier départ', share_pick_end_stop: 'Touchez maintenant le dernier arrêt',
+    share_every: 'toutes les {n} min',
   },
 };
