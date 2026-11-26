@@ -38,6 +38,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from email.utils import parsedate_to_datetime
 
 import staticfeeds
 import store
@@ -317,24 +318,60 @@ def nap_download_url(pseudo_url):
 
 def _resolve_direct(src):
     """Operator with fixed URLs: the timetable 'stamp' is the file's Last-Modified (or ETag) from a HEAD request,
-    so the importer re-imports when the publisher uploads a new file."""
+    so the importer re-imports when the publisher uploads a new file.
+
+    Renfe answers from several servers that hold the same file with modification times a few seconds apart (and
+    different ETags), so two requests for an unchanged file can give different stamps. A new Last-Modified counts as
+    a new file only when it differs by more than STAMP_TOLERANCE seconds or the size changed; otherwise the stamp
+    already stored is kept, and nothing is downloaded again."""
     url = src["gtfs_url"]
-    stamp = ""
+    stamp, ts, size = "", None, ""
     try:
         req = urllib.request.Request(url, headers=UA, method="HEAD")
         with urllib.request.urlopen(req, timeout=30, context=SSL_CTX) as r:
-            stamp = r.headers.get("Last-Modified") or r.headers.get("ETag") or ""
+            lm = r.headers.get("Last-Modified")
+            stamp = lm or r.headers.get("ETag") or ""
+            size = r.headers.get("Content-Length") or ""
+            if lm:
+                try:
+                    ts = parsedate_to_datetime(lm).timestamp()
+                except (TypeError, ValueError):
+                    ts = None
     except Exception as e:
         log.warning("%s: cannot read the headers of %s (%s)", src["slug"], url, e)
     with _lock:
         cache = _load_cache()
+        last = cache.get(src["slug"], {})
         if stamp:
-            if cache.get(src["slug"], {}).get("stamp") != stamp:
-                cache[src["slug"]] = {"stamp": stamp}
+            if _same_file(last, stamp, ts, size):
+                stamp = last["stamp"]                   # the same file seen from another server
+            else:
+                cache[src["slug"]] = {"stamp": stamp, "ts": ts, "size": size}
                 _save_cache(cache)
         else:
-            stamp = cache.get(src["slug"], {}).get("stamp", "")   # keep the last known one: no needless re-import
+            stamp = last.get("stamp", "")   # keep the last known one: no needless re-import
     return {"gtfs": url, "stamp": stamp, "rt": dict(src.get("rt") or {})}
+
+
+STAMP_TOLERANCE = 600       # seconds of difference between servers that still mean "the same file"
+
+
+def _same_file(last, stamp, ts, size):
+    if not last.get("stamp"):
+        return False
+    if last["stamp"] == stamp:
+        return True
+    if ts is None:
+        return False
+    old_ts = last.get("ts")
+    if old_ts is None:                                  # entry written before this check: read it from the text
+        try:
+            old_ts = parsedate_to_datetime(last["stamp"]).timestamp()
+        except (TypeError, ValueError):
+            return False
+    if last.get("size") and size and last["size"] != size:
+        return False
+    return abs(ts - old_ts) <= STAMP_TOLERANCE
 
 
 def should_force(slug):

@@ -127,6 +127,9 @@ index (`data-index.json`) reports a newer timetable. Real-time `.pb` feeds are f
   outline below the others; zoomed out, the count bubbles include every kind alike). Each kind can be shown or hidden in the Filters tab.
 - AlavaBus encodes entity timestamps as local time; `LOCAL_EPOCH` in `core.py` corrects this.
 - The Renfe feeds cover all of Spain; see "Limited to Euskal Herria" below.
+- Renfe's servers give the same file slightly different `Last-Modified` / `ETag` values (seconds apart), so a file
+  counts as new only when its date differs by more than 10 minutes or its size changes (`sources._same_file`);
+  otherwise every start would download and import it again.
 
 ## Cache busting
 
