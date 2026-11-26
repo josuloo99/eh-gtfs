@@ -107,6 +107,8 @@ SOURCES = [
         "name": "Villavesas (Comarca de Pamplona)",
         "region": "nav",
         "nap_dataset": 976,           # Autobus Comarca de Pamplona (Infotuc)
+        # GPS from the operator's web map (SIRI-VM), no GTFS-RT exists; see villavesa.py
+        "rt_static": {"vehicles": "siri://villavesa"},
     },
     {
         # La Baztanesa (Elizondo - Pamplona - Donostia) publishes only PDF timetables, no GTFS: transcribed by hand
@@ -185,6 +187,13 @@ def source_label(src):
 
 
 def resolve(src):
+    res = _resolve(src)
+    if res and src.get("rt_static"):
+        res = dict(res, rt=dict(res["rt"], **src["rt_static"]))     # pseudo URLs handled inside core.get_feed
+    return res
+
+
+def _resolve(src):
     """Current URLs of one operator: {"gtfs": url, "stamp": str, "rt": {"trips": url, "alerts": url}} or None.
 
     `stamp` changes when the publisher updates the timetable (the importer re-imports on change)."""

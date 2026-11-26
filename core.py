@@ -21,6 +21,7 @@ import region
 import sources
 import staticfeeds
 import store
+import villavesa
 from store import TZ, AgencyDB, candidate_days, haversine, norm, service_midnight
 
 log = logging.getLogger("moveuskadi")
@@ -132,7 +133,8 @@ def load_extra_sources(only=None):
         if not res:
             log.warning("%s: no URLs available yet", src["slug"])
             continue
-        rt = {k: v for k, v in res["rt"].items()}
+        rt = {k: v for k, v in res["rt"].items()
+              if villavesa.ENABLED or not v.startswith(villavesa.SCHEME)}
         new[src["slug"]] = {"name": src["name"], "gtfs": res["gtfs"], "gtfs_stamp": res["stamp"], "rt": rt,
                             "slug": src["slug"], "region": src["region"], "quirks": dict(src.get("quirks") or {}),
                             "source": sources.source_label(src)}
@@ -273,6 +275,8 @@ def get_feed(url, ttl=RT_TTL, slug=None):
     f = _feeds.get(url)
     if f is None:
         f = _feeds.setdefault(url, Feed(url))
+    if url.startswith(villavesa.SCHEME):
+        return _villavesa_get(f, slug)
     if time.time() - f.fetched < ttl:
         return f
     with f.lock:
@@ -290,6 +294,43 @@ def get_feed(url, ttl=RT_TTL, slug=None):
                 f.data = {"timestamp": 0, "trip_updates": [], "vehicles": [], "alerts": []}
         f.fetched = time.time()
     return f
+
+
+def _villavesa_get(f, slug):
+    """Villavesas needs one request per line (several seconds), so it refreshes in the background: callers always
+    get the last result at once, and only one refresh runs at a time (nothing runs while nobody asks)."""
+    if f.data is None:
+        f.data = {"timestamp": 0, "trip_updates": [], "vehicles": [], "alerts": []}
+    if time.time() - f.fetched >= villavesa.TTL and f.lock.acquire(blocking=False):
+        def work():
+            try:
+                f.data = _villavesa_feed(slug)
+                f.error = None
+            except Exception as e:
+                f.error = str(e)[:120]
+                log.warning("villavesa: %s", f.error)
+            finally:
+                f.fetched = time.time()
+                f.lock.release()
+        threading.Thread(target=work, daemon=True).start()
+    return f
+
+
+def _villavesa_feed(slug):
+    """GPS positions of Villavesas (see villavesa.py): the lines asked for are those with a trip running now."""
+    db = DBS.get(slug)
+    if db is None:
+        return {"timestamp": 0, "trip_updates": [], "vehicles": [], "alerts": []}
+    now = int(time.time())
+    running = set()
+    spans = _trip_spans(slug, db)
+    for d in candidate_days(now):
+        active = db.active_services(d)
+        if not active:
+            continue
+        rel = now - service_midnight(d)
+        running.update(r for _, _, r, sv, _, _, first, last in spans if sv in active and first - 900 <= rel <= last + 900)
+    return villavesa.fetch(running, set(db.routes()))
 
 
 def fix_ts(slug, t):
@@ -1428,6 +1469,13 @@ def _build_vehicles():
                 trip = _trip(db, slug, tinfo.get("trip_id")) if tinfo.get("trip_id") else None
                 route_id = tinfo.get("route_id") or (trip or {}).get("route_id")
                 li = line_info(db, route_id)
+                meta = v.get("line_meta")
+                if meta and route_id not in db.routes():     # a line the timetable lacks: use what the service publishes
+                    li = {"line": meta["line"], "color": meta["color"], "text_color": meta["text_color"],
+                          "mode": "bus", "long": meta["name"]}
+                brg = v.get("bearing")
+                if brg is None and trip and v.get("shape_heading"):       # no heading sent: that of the route here
+                    brg = _shape_heading(db, trip, v["lat"], v["lon"])
                 delay, hs = None, (trip or {}).get("headsign") or ""
                 if trip and tus.get(trip["trip_id"]):
                     rows = db.trip_stop_times(trip["tix"])
@@ -1443,10 +1491,10 @@ def _build_vehicles():
                 out.append({
                     "id": "%s:%s" % (slug, vid.get("id") or v["id"]), "agency": slug, "agency_name": info["name"],
                     "label": re.sub(r"-PLATF\.\(\d+\)$", "", vid.get("label") or vid.get("id") or ""), "lat": round(v["lat"], 6),
-                    "lon": round(v["lon"], 6), "bearing": v.get("bearing"),
+                    "lon": round(v["lon"], 6), "bearing": brg,
                     "speed": round(v["speed"] * 3.6) if v.get("speed") is not None else None,
                     "route_id": route_id, "line": li["line"], "color": li["color"], "text_color": li["text_color"],
-                    "mode": li["mode"], "headsign": hs or li["long"], "trip_id": tinfo.get("trip_id"),
+                    "mode": li["mode"], "headsign": hs or li["long"], "trip_id": tinfo.get("trip_id") if trip else None,
                     "date": tinfo.get("start_date"),
                     "stop": _stop_name(db, v.get("stop_id")) if v.get("stop_id") else None,
                     "status": v.get("status"), "ts": fix_ts(slug, v.get("timestamp")), "delay": delay, "est": False,
@@ -1461,6 +1509,17 @@ def _build_vehicles():
             log.exception("vehicle build failed for %s", slug)
     data = {"time": now, "vehicles": out, "feeds": feeds}
     return data
+
+
+def _shape_heading(db, trip, lat, lon):
+    """Direction of travel of a trip's route at the point nearest to (lat, lon), or None when it is not on it."""
+    geom = shape_geom(db, trip.get("shape_id"))
+    if not geom:
+        return None
+    res = _project(geom, lat, lon, 0.0, geom[2][-1])
+    if not res or res[1] > MAX_SNAP_M:
+        return None
+    return round(_point_at(geom, res[0])[2])
 
 
 def _estimated_vehicles(slug, info, db, tus, now):

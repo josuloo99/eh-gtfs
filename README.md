@@ -106,7 +106,7 @@ index (`data-index.json`) reports a newer timetable. Real-time `.pb` feeds are f
 - Vehicles on the map come in three kinds (`kind` in `/api/vehicles`), most to least eye-catching:
   `gps` (real position from the operator: solid pill with a coloured ring), `est` (estimated from live
   arrival data, Euskotren / Lurraldebus / Txik Txak: dashed outline) and `sched` (operator without any live data,
-  e.g. Villavesas or Navarra interurban: position computed from the timetable only, drawn faded with a dotted
+  e.g. Navarra interurban: position computed from the timetable only, drawn faded with a dotted
   outline below the others; zoomed out, the count bubbles include every kind alike). Each kind can be shown or hidden in the Filters tab.
 - AlavaBus encodes entity timestamps as local time; `LOCAL_EPOCH` in `core.py` corrects this.
 - The Renfe feeds cover all of Spain; see "Limited to Euskal Herria" below.
@@ -215,6 +215,28 @@ Settings (optional environment variables, e.g. under `environment:` in `docker-c
 `LURRALDEBUS_LIVE=0` disables everything, `LURRALDEBUS_TRACK=0` disables only the map tracker,
 `LURRALDEBUS_RATE` (requests/s, default 1.0) and `LURRALDEBUS_MAX_STOPS` (default 60) tune the limits. The Info tab shows the source status per
 operator.
+
+## Villavesas live GPS
+
+Villavesas (Comarca de Pamplona) publishes no GTFS-RT, but its web map (tuvillavesa.es/eu/interactive-map) shows
+live buses from a SIRI-VM service, one request per line (`villavesa.py`). The positions are real GPS, so they are
+drawn as `gps` vehicles, like Bizkaibus or Dbus.
+
+- The service needs a bearer token (a JWT valid for 5 minutes). The web page gets it from a Next.js server action
+  without any login; `villavesa.py` calls the same action when it needs a token. Nothing is configured or stored.
+  The action is identified by a hash that changes when the site is rebuilt: when it stops answering, the page's
+  scripts are scanned for hashes and each one is tried until one returns a JWT.
+- Each `VehicleJourneyRef` is the GTFS `trip_id` of the NAP dataset, so a bus is tied to its scheduled trip (trip
+  page, headsign, route shape). Lines that are not in that GTFS (R1-R5 on match days, A to the airport) are drawn
+  with the name and colour the service publishes. SIRI sends no heading: it is taken from the bus's movement, or
+  from the direction of the trip's route at that point.
+- Being polite to their server: nothing is requested while nobody uses the app, the result is shared by all
+  clients and refreshed in the background every 30 s at most, only the lines with a trip scheduled now are asked
+  for (about 25 by day, a few at night), 3 requests run at once, and the lines the GTFS lacks are asked for less
+  often when they are empty. If the service fails, the last positions are kept for 90 s and then the operator goes
+  back to theoretical (timetable) positions.
+- Positions are therefore up to about a minute old. Optional environment variables: `VILLAVESA_LIVE=0` turns it
+  off, `VILLAVESA_TTL` (seconds, default 30) changes the refresh period.
 
 ## Docker
 

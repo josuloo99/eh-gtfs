@@ -10,7 +10,7 @@ RUN apt-get update \
  && useradd --create-home --uid 10001 app
 
 WORKDIR /app
-COPY --chown=app:app server.py core.py store.py gtfsrt.py lurraldebus.py sources.py staticfeeds.py region.py ./
+COPY --chown=app:app server.py core.py store.py gtfsrt.py lurraldebus.py villavesa.py sources.py staticfeeds.py region.py ./
 COPY --chown=app:app feeds ./feeds
 COPY --chown=app:app static ./static
 RUN mkdir -p /app/data && chown app:app /app/data
