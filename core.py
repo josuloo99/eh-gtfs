@@ -17,6 +17,7 @@ from datetime import date as date_cls, datetime, timedelta
 
 import gtfsrt
 import lurraldebus
+import bizkaibus
 import region
 import sources
 import staticfeeds
@@ -715,6 +716,7 @@ def lb_note_view(s, w, n, e):
         _lb_views.append((now, s, w, n, e))
     if not covered:
         _lb_wake.set()     # a new area: do not wait for the end of the current tracker cycle
+        _bz_wake.set()
 
 
 def _lb_active_views(now):
@@ -1438,6 +1440,311 @@ def _interp(eff, now, dists=None, geom=None):
     return None
 
 
+# ---- GPS fixes that are already old when they are published
+#
+# Some operators (Dbus) publish positions that are 1-2 minutes old when the feed is written, and the app adds its own
+# polling on top. In a city a bus covers hundreds of metres in that time, so the marker lags behind the real bus.
+# The fix is moved forward along the bus's route by its age, following the timetable: the point of the route where the
+# bus was seen is turned into a scheduled time, that time is advanced by the age of the fix, and the position of the
+# schedule at that time is where the bus should be now. Nothing is guessed about speed: it is the scheduled speed of
+# each stretch. Measured on 339 pairs of real Dbus fixes (a fix predicted from the one before it), the displayed bus
+# was a median 409 m behind the real one along its route; with this it is within 13 m on average, and the median error
+# drops from 344 m to about 100 m (90th percentile from 654 m to 300 m).
+
+ADVANCE_MAX_S = 240        # never move a fix by more than this (a bus that stopped reporting is not extrapolated for ever)
+ADVANCE_MIN_S = 5          # younger fixes are used as they are
+ADVANCE_MAX_OFF_M = 120    # a fix further than this from its route is off route: left alone
+# Operators whose positions are advanced: those whose feed is written well after the fixes (Dbus: about 2.5 minutes
+# on average, the feed is rebuilt once a minute and each bus reports about every 90 s; Bizkaibus: 130-215 s, one
+# snapshot about every two minutes). ADVANCE_FIXES=<slug,slug> changes the list and ADVANCE_FIXES=none turns the
+# correction off.
+ADVANCE_OPERATORS = {s.strip() for s in os.environ.get("ADVANCE_FIXES", "dbus,bizkaibus").split(",")} - {"", "none", "0"}
+
+
+def _time_knots(rows, dists):
+    """[(distance along the shape, scheduled arrival, scheduled departure)] of the stops snapped to the shape."""
+    knots = []
+    for r, d in zip(rows, dists):
+        if d is None or (knots and d < knots[-1][0]):
+            continue
+        knots.append((d, r["arr"], r["dep"]))
+    return knots
+
+
+def _time_at_dist(knots, d):
+    """Scheduled time at which a bus that follows the timetable is d metres along the shape."""
+    if d <= knots[0][0]:
+        return knots[0][1]
+    for (da, _, pa), (db_, ab, _) in zip(knots, knots[1:]):
+        if d <= db_:
+            return pa + (ab - pa) * (d - da) / max(db_ - da, 1e-6)
+    return knots[-1][2]
+
+
+def _dist_at_time(knots, tau):
+    """Distance along the shape of a bus that follows the timetable at scheduled time tau."""
+    if tau <= knots[0][1]:
+        return knots[0][0]
+    for (da, _, pa), (db_, ab, _) in zip(knots, knots[1:]):
+        if tau <= pa:
+            return da                                    # dwelling at the stop
+        if tau < ab:
+            return da + (db_ - da) * (tau - pa) / max(ab - pa, 1)
+    return knots[-1][0]
+
+
+def fix_on_route(db, trip, rows, lat, lon, stop_id):
+    """Put a fix on its trip's route: {"geom", "dists", "knots", "d"} (d = metres along the shape), or None when it
+    cannot be (no shape, too few stops snapped to it, further than ADVANCE_MAX_OFF_M from the route).
+
+    The bus is searched between the stop before the one it is heading to and a little past that one."""
+    geom = shape_geom(db, trip.get("shape_id"))
+    if not geom:
+        return None
+    dists = stop_distances(db, trip, rows)
+    knots = _time_knots(rows, dists)
+    if len(knots) < 2:
+        return None
+    total = geom[2][-1]
+    lo, hi = 0.0, total
+    for i, r in enumerate(rows):
+        if r["stop_id"] == stop_id and dists[i] is not None:
+            prev = [d for d in dists[:i] if d is not None]
+            lo = max((prev[-1] if prev else 0.0) - 100.0, 0.0)
+            hi = min(dists[i] + 150.0, total)
+            break
+    res = _project(geom, lat, lon, lo, hi)
+    if not res or res[1] > ADVANCE_MAX_OFF_M:
+        return None
+    return {"geom": geom, "dists": dists, "knots": knots, "d": res[0]}
+
+
+def advance_distance(fx, d0, dt):
+    """A bus d0 metres along its route dt seconds ago, following the timetable: (lat, lon, bearing, metres moved, d now)."""
+    knots = fx["knots"]
+    d1 = max(_dist_at_time(knots, _time_at_dist(knots, d0) + min(max(dt, 0), ADVANCE_MAX_S)), d0)
+    la, lo, brg = _point_at(fx["geom"], d1)
+    return la, lo, brg, d1 - d0, d1
+
+
+def advance_fix(db, trip, rows, lat, lon, stop_id, dt):
+    """Where a bus seen at (lat, lon) dt seconds ago, heading to stop_id, should be now.
+
+    Returns (lat, lon, bearing, metres_moved, distance_along_route), or None when the fix should be used as it is
+    (too young, no shape, not on its route...)."""
+    if dt < ADVANCE_MIN_S:
+        return None
+    fx = fix_on_route(db, trip, rows, lat, lon, stop_id)
+    return advance_distance(fx, fx["d"], dt) if fx else None
+
+
+# ---- Bizkaibus: positions from the stop arrival service
+#
+# The Bizkaibus feed is one snapshot of every bus, rebuilt about every two minutes (130-215 s old when it arrives), and
+# even advanced along the timetable it is off by about 450 m (1.4 km for one bus in ten). bizkaia.eus' stop service
+# (bizkaibus.py) says, for every line at a stop, how many METRES the next two buses still have to travel, which places
+# them on their route right now (within about 100 m, measured). The answer has no bus id, so each one is matched to the
+# snapshot: the first bus of a line before the stop is the first one listed, and so on; a bus that the snapshot puts
+# closer to the stop than the service does has already passed it (a bus cannot move backwards), and one that would have
+# had to travel faster than a bus can since its snapshot is somebody else. Each match becomes an observation (trip,
+# metres along its route, time) that the vehicle list advances along the timetable by its age.
+#
+# Who is asked: only while a client is looking at a map area with buses (the same views the Lurraldebus tracker
+# uses), only for buses in view, and the fewest stops that show them: stops a little ahead of the bus, chosen greedily
+# by how many buses (two per line) they would reveal. Everything is rate limited in bizkaibus.py.
+
+BZ_SLUG = "bizkaibus"
+BZ_OBS_MAX = 90           # an observation is used for this long (s): older than that it is no better than the snapshot
+BZ_REFRESH = 40           # a bus whose observation is older than this is asked about again (s)
+BZ_MARGIN = 350           # ask about stops at least this far ahead of the bus (m): it must not have passed them
+BZ_AHEAD = 8000           # ... and at most this far (m)
+BZ_TOL = 250              # slack when comparing a distance from the service with one from a snapshot (m)
+BZ_VMAX = 28              # m/s: the fastest a bus can have moved since its snapshot (rejects wrong matches)
+BZ_MAX_STOPS = 80         # stops asked about per tracker cycle
+BZ_CYCLE = 25             # shortest tracker cycle (s)
+BZ_MAX_BUSES = 400        # views covering more buses than this are not tracked (too much to ask for)
+_bz_obs = {}              # trip_id -> {"t", "d", "stop", "metres", "minutes"}
+_bz_lock = threading.Lock()
+_bz_wake = threading.Event()
+_bz_fetched = {}          # stop -> time of the answer already used
+_bz_snap = {"key": None, "data": []}
+
+
+def _bz_enabled():
+    return bizkaibus.ENABLED and BZ_SLUG in AGENCIES and AGENCIES[BZ_SLUG]["ready"] and BZ_SLUG in DBS
+
+
+def bz_build_snapshot(slug, vehicles):
+    """The buses of a snapshot that can be placed on their route: [{trip, trip_id, route_id, head, fx, d, ts, sd}]
+    where sd = {stop_id: metres along the route} of the stops still ahead of the bus."""
+    db, out = DBS[slug], []
+    for v in vehicles:
+        tid = (v.get("trip") or {}).get("trip_id")
+        trip = _trip(db, slug, tid) if tid else None
+        if not trip or not v.get("lat") or not v.get("lon"):
+            continue
+        rows = db.trip_stop_times(trip["tix"])
+        fx = fix_on_route(db, trip, rows, v["lat"], v["lon"], v.get("stop_id"))
+        if not fx:
+            continue
+        sd = {}
+        for r, d in zip(rows, fx["dists"]):
+            if d is not None and d >= fx["d"] - BZ_TOL and r["stop_id"] not in sd:
+                sd[r["stop_id"]] = d
+        out.append({"trip": trip, "trip_id": tid, "route_id": trip["route_id"], "head": norm(trip.get("headsign") or ""),
+                    "fx": fx, "d": fx["d"], "ts": fix_ts(slug, v.get("timestamp")) or 0, "sd": sd})
+    return out
+
+
+def _bz_snapshot(slug=BZ_SLUG):
+    """The latest snapshot of the feed, built once per snapshot."""
+    f = feed_for(slug, "vehicles")
+    if not f or not f.data:
+        return []
+    key = (slug, f.data.get("timestamp"), len(f.data["vehicles"]), DBS[slug].version)
+    if _bz_snap["key"] != key:
+        _bz_snap.update(key=key, data=bz_build_snapshot(slug, region_items(slug, "vehicles", f.data["vehicles"])))
+    return _bz_snap["data"]
+
+
+def bz_observation(trip_id, fix_time, now):
+    """The fresh observation of a bus, if there is one newer than its snapshot position."""
+    o = _bz_obs.get(trip_id)
+    return o if o and o["t"] > fix_time and now - o["t"] <= BZ_OBS_MAX else None
+
+
+def bz_ingest(res, slug=BZ_SLUG):
+    """Match the buses an answer lists for one stop to the snapshot and keep what they say. Returns how many."""
+    if not res or res["status"] != "ok":
+        return 0
+    stop_id = res["stop_id"]
+    t_obs = res["t_asked"] + (res["fetched"] - res["t_asked"]) / 2
+    snap = _bz_snapshot(slug)
+    n = 0
+    for a in res["arrivals"]:
+        rids = _lb_route_ids(slug, a["line"])
+        head = norm(a["dest"])
+        cands = []
+        for b in snap:
+            if b["route_id"] not in rids or stop_id not in b["sd"]:
+                continue
+            cands.append((b["sd"][stop_id] - b["d"], b))        # metres to go according to the snapshot
+        same_dest = [c for c in cands if c[1]["head"] == head]
+        cands = sorted(same_dest or cands, key=lambda c: c[0])
+        i = 0
+        for bus in a["buses"]:
+            m = bus["metres"]
+            while i < len(cands) and cands[i][0] < m - BZ_TOL:   # it was closer than the service says: it has gone by
+                i += 1
+            if i >= len(cands):
+                break
+            rem, b = cands[i]
+            if rem - m > (t_obs - b["ts"]) * BZ_VMAX + BZ_TOL:      # it would have had to fly: another bus
+                break
+            d_obs = b["sd"][stop_id] - m
+            with _bz_lock:
+                old = _bz_obs.get(b["trip_id"])
+                if not old or old["t"] <= t_obs:
+                    _bz_obs[b["trip_id"]] = {"t": t_obs, "d": d_obs, "stop": stop_id, "metres": m, "minutes": bus["minutes"]}
+            n += 1
+            i += 1
+    return n
+
+
+def bz_plan(now, views, limit=BZ_MAX_STOPS):
+    """The stops to ask about now: [(stop_id, buses it should reveal)], best first."""
+    snap = _bz_snapshot()
+    if not snap or not views:
+        return []
+    pad = LB_VIEW_PAD
+    est = {}
+    for b in snap:
+        obs = bz_observation(b["trip_id"], b["ts"], now)
+        a = advance_distance(b["fx"], obs["d"] if obs else b["d"], now - (obs["t"] if obs else b["ts"]))
+        est[b["trip_id"]] = (a[0], a[1], a[4], now - obs["t"] if obs else None)
+
+    def in_view(lat, lon):
+        return any(s - pad <= lat <= n + pad and w - pad <= lon <= e + pad for s, w, n, e in views)
+    need = {b["trip_id"] for b in snap if in_view(*est[b["trip_id"]][:2])
+            and (est[b["trip_id"]][3] is None or est[b["trip_id"]][3] > BZ_REFRESH)}
+    if not need or len(need) > BZ_MAX_BUSES:
+        return []
+    # every stop ahead of every bus, with how far: the first two buses of a line before a stop are the ones it lists
+    by_stop = {}
+    for b in snap:
+        d1 = est[b["trip_id"]][2]
+        for sid, ds in b["sd"].items():
+            rem = ds - d1
+            if -BZ_TOL <= rem <= BZ_AHEAD + BZ_MARGIN:
+                by_stop.setdefault(sid, {}).setdefault((b["route_id"], b["head"]), []).append((rem, b["trip_id"]))
+    cover = {}
+    for sid, groups in by_stop.items():
+        r = bizkaibus.client.peek(sid)
+        if bizkaibus.code(sid) is None or (r and r["status"] == "empty" and now - r["fetched"] < bizkaibus.TTL_EMPTY):
+            continue
+        seen = set()
+        for items in groups.values():
+            items.sort()
+            seen.update(t for rem, t in items[:2] if rem >= BZ_MARGIN and t in need)
+        if seen:
+            cover[sid] = seen
+    plan, left = [], set(need)
+    while left and len(plan) < limit:
+        sid, gain = max(((k, len(v & left)) for k, v in cover.items()), key=lambda x: x[1], default=(None, 0))
+        if not gain:
+            break
+        plan.append((sid, gain))
+        left -= cover.pop(sid)
+    return plan
+
+
+def bz_gc(now=None):
+    now = now or time.time()
+    with _bz_lock:
+        for k in [k for k, o in _bz_obs.items() if now - o["t"] > BZ_OBS_MAX * 2]:
+            del _bz_obs[k]
+    for k in [k for k, t in _bz_fetched.items() if now - t > 3600]:
+        del _bz_fetched[k]
+
+
+def bz_agency_status():
+    st = bizkaibus.client.stats()["state"]
+    now = time.time()
+    with _bz_lock:
+        n = sum(1 for o in _bz_obs.values() if now - o["t"] <= BZ_OBS_MAX)
+    status = {"live": "live", "paused": "error", "idle": "idle", "off": "none"}[st]
+    return {"status": status, "n": n if status == "live" else 0}
+
+
+def bz_tracker_loop():
+    """Background poller for Bizkaibus: only while a client is looking at a map area with buses, always rate limited."""
+    log.info("bizkaibus tracker %s", "enabled" if bizkaibus.ENABLED else "disabled")
+    while True:
+        try:
+            if not bizkaibus.ENABLED or not _bz_enabled():
+                time.sleep(20)
+                continue
+            now = time.time()
+            views = _lb_active_views(now)
+            if not views:
+                _bz_wake.wait(10)
+                _bz_wake.clear()
+                continue
+            _bz_wake.clear()
+            for stop_id, _gain in bz_plan(now, views):
+                if not _lb_active_views(time.time()):
+                    break
+                res = bizkaibus.client.get(stop_id)
+                if res and not res.get("stale") and _bz_fetched.get(stop_id) != res["fetched"]:
+                    _bz_fetched[stop_id] = res["fetched"]
+                    bz_ingest(res)
+            bz_gc()
+            _bz_wake.wait(max(2.0, BZ_CYCLE - (time.time() - now)))
+        except Exception:
+            log.exception("bizkaibus tracker")
+            time.sleep(10)
+
+
 def vehicles(max_age=10):
     with _veh_lock:
         if _veh_cache["data"] is not None and time.time() - _veh_cache["t"] < max_age:
@@ -1489,16 +1796,35 @@ def _build_vehicles():
                         if nxt:
                             delay = nxt["dep"] - nxt["sched_dep"]
                 vid = (v.get("vehicle") or {})
+                lat, lon, adv, obs_age = v["lat"], v["lon"], None, None
+                fix_time = fix_ts(slug, v.get("timestamp"))
+                want_obs = slug == BZ_SLUG and bizkaibus.ENABLED
+                if (slug in ADVANCE_OPERATORS or want_obs) and trip and fix_time:
+                    # the fix is old by the time it is published: where should the bus be by now?
+                    fx = fix_on_route(db, trip, db.trip_stop_times(trip["tix"]), lat, lon, v.get("stop_id"))
+                    obs = bz_observation(trip["trip_id"], fix_time, now) if want_obs and fx else None
+                    if fx and obs:       # the stop service placed it more recently: from there, along the timetable
+                        adv, obs_age = advance_distance(fx, obs["d"], now - obs["t"]), int(now - obs["t"])
+                    elif fx and slug in ADVANCE_OPERATORS and now - fix_time >= ADVANCE_MIN_S:
+                        adv = advance_distance(fx, fx["d"], now - fix_time)
+                    if adv:
+                        lat, lon, brg = adv[0], adv[1], round(adv[2])
+                        adv = adv[:3] + (max(adv[4] - fx["d"], 0.0),)       # metres along the route from the raw fix
+                # some feeds (Bizkaibus) number the vehicles of every snapshot afresh ("<snapshot time>_<n>"): such an
+                # id is neither stable nor meaningful, the trip identifies the bus
+                raw_id = str(vid.get("id") or v["id"])
+                snapshot_id = re.match(r"^\d{8,}_\d+$", raw_id) is not None and bool(tinfo.get("trip_id"))
                 out.append({
-                    "id": "%s:%s" % (slug, vid.get("id") or v["id"]), "agency": slug, "agency_name": info["name"],
-                    "label": re.sub(r"-PLATF\.\(\d+\)$", "", vid.get("label") or vid.get("id") or ""), "lat": round(v["lat"], 6),
-                    "lon": round(v["lon"], 6), "bearing": brg,
+                    "id": "%s:%s" % (slug, tinfo["trip_id"] if snapshot_id else raw_id), "agency": slug, "agency_name": info["name"],
+                    "label": "" if snapshot_id else re.sub(r"-PLATF\.\(\d+\)$", "", vid.get("label") or vid.get("id") or ""),
+                    "lat": round(lat, 6),
+                    "lon": round(lon, 6), "bearing": brg, "advanced": round(adv[3]) if adv else None, "obs_age": obs_age,
                     "speed": round(v["speed"] * 3.6) if v.get("speed") is not None else None,
                     "route_id": route_id, "line": li["line"], "color": li["color"], "text_color": li["text_color"],
                     "mode": li["mode"], "headsign": hs or li["long"], "trip_id": tinfo.get("trip_id") if trip else None,
                     "date": tinfo.get("start_date"),
                     "stop": _stop_name(db, v.get("stop_id")) if v.get("stop_id") else None,
-                    "status": v.get("status"), "ts": fix_ts(slug, v.get("timestamp")), "delay": delay, "est": False,
+                    "status": v.get("status"), "ts": fix_time, "delay": delay, "est": False,
                     "sched": False, "kind": "gps",
                 })
             if not vlist and tus:
@@ -1843,6 +2169,8 @@ def agencies_summary():
                 rt[k] = feed_stats(slug, k)
         if is_lb(slug):
             rt["arrivals"] = lb_agency_status(slug)
+        elif slug == BZ_SLUG and bizkaibus.ENABLED:
+            rt["arrivals"] = bz_agency_status()
         modes = []
         if info["ready"]:
             try:

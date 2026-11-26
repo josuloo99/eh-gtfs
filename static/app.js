@@ -439,7 +439,7 @@ function vehCardInner(v) {
     ${v.speed != null ? `<div class="kv"><span class="muted">${t('speed')}</span><b>${v.speed} km/h</b></div>` : ''}
     ${v.occupancy != null ? `<div class="kv"><span class="muted">${t('occupancy')}</span><b>${occChip(v.occupancy)}</b></div>` : ''}
     ${v.ts ? `<div class="muted small" style="margin-top:4px">${updatedAgo(v.ts)}</div>` : ''}
-    <div class="muted small" style="margin-top:4px">${v.sched ? t('position_sched') : v.est ? t('position_est') : t('position_gps')}</div>`;
+    <div class="muted small" style="margin-top:4px">${v.sched ? t('position_sched') : v.est ? t('position_est') : v.obs_age != null ? t('position_gps_stop').replace('{n}', v.obs_age) : v.advanced ? t('position_gps_adv').replace('{n}', Math.round(v.advanced / 10) * 10) : t('position_gps')}</div>`;
 }
 function vehCard(view) {
   const v = findVehicle(view);

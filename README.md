@@ -258,6 +258,72 @@ Settings (optional environment variables, e.g. under `environment:` in `docker-c
 `LURRALDEBUS_RATE` (requests/s, default 1.0) and `LURRALDEBUS_MAX_STOPS` (default 60) tune the limits. The Info tab shows the source status per
 operator.
 
+## Old GPS fixes (Dbus, Bizkaibus)
+
+The Open Data Euskadi vehicle feeds are written well after the GPS fixes are taken. For Dbus the feed is rebuilt about
+once a minute and each bus reports about every 90 s, so a position is between 100 s and 215 s old when the app gets
+it (about 2.5 minutes on average); in a city that is 400 m or more. Its trip updates carry only the next stop and a
+delay that is almost always 0, so they add no arrival times.
+
+`core.advance_fix` moves each fix forward along the bus's route (the trip's shape) by the age of the fix, following the
+timetable: the point where the bus was seen becomes a scheduled time, that time is advanced by the age of the fix,
+and the schedule gives the position. The bus must be on its route (within 120 m) and between the stops around the one
+it is heading to; the move is limited to 240 s. Buses that do not match (no shape, off route) stay where they were
+reported. The vehicle card says when a position was moved, and by about how much; the time shown is still the fix's.
+
+Measured on 339 pairs of real Dbus fixes (a fix predicted from an earlier one of the same bus): without the
+correction the shown bus was a median 409 m behind the real one along its route and 344 m away in a straight line
+(90th percentile 654 m); with it the bias is about 0 m and the median error about 100 m (90th percentile 300 m).
+Limiting how many stops ahead a bus may be moved made it worse, so there is no such limit. Checked again later on 906
+more pairs (fix ages 60-215 s): median error 91 m, 90th percentile 286 m, against 360 m and 710 m for the unmoved
+fix; adding a dwell time per stop (5-45 s) to the timetable does not help (equal or worse), so none is used.
+
+Dbus's own website estimates the arrival at a stop (`admin-ajax.php?action=calcula_parada`, POST, with a `security`
+nonce that the line pages embed, an internal `parada` id per stop from each line's `<n>markers.xml`, and a session
+cookie). It answers one stop per request (1-4 s each) with the next bus of every line, in whole minutes. It was
+compared with the correction above on 463 estimates, against when the buses really reached the stop (from their later
+fixes): for buses 0-5 minutes away the estimate is better by about 15 s at the median (30 s against 45 s); from 6 to 12
+minutes it is about the same, and beyond 12 minutes it is just the timetable (median error 19 minutes). Covering every
+bus would take one request per active stop, which is too much for that site (it is a WordPress admin endpoint, and
+it prints its own SQL in the answer), for a gain of about 60 m. So it is **not** used for the map. If someone wants
+live "next bus" times in the stop view (the estimate is good there), it would be done like the Lurraldebus arrivals.
+
+It is enabled for Dbus and Bizkaibus (Bizkaibus: snapshots 130-215 s old; not moved the median error is about 700 m,
+advanced 450 m). Other feeds of the same publisher are as old (Metro Bilbao 150 s, Alavabus 120 s, Tuvisa 95 s; Renfe
+11 s) and could be added. `ADVANCE_FIXES=dbus,bizkaibus,...` changes the operators, `ADVANCE_FIXES=none` turns it off.
+
+### Bizkaibus: positions from the stop arrival service
+
+Bizkaibus publishes one snapshot of all its buses (a single timestamp), rebuilt about every two minutes, and numbers
+the vehicles of each snapshot afresh (`<snapshot time>_<n>`), so the ids change every time: the app identifies a bus by
+its trip instead (stable markers, and no junk label). Advancing the snapshot along the timetable is not enough for
+buses that run fast on long stretches, but bizkaia.eus has a service that tells, for a stop, how many minutes **and
+metres** the next two buses of every line still have to travel (`bizkaibus.py`, no key, 0.5 s per answer). The metres
+place the bus on its route right now.
+
+- **Matching.** The answer has no bus id: the line's buses before the stop are taken from the latest snapshot in the
+  order of their distance to it, and the first bus listed is the first of them that has not already gone by (a bus
+  cannot move backwards) and could have got there at a possible speed (28 m/s) since its snapshot; the second listed is
+  the next one. A match becomes an observation (`trip`, metres along the route, time) that is advanced along the
+  timetable by its age for as long as it is at most 90 s old; after that, or without one, the snapshot is advanced as
+  for Dbus. The vehicle card says which one was used.
+- **Who is asked.** Only while a client shows buses on the map (the same map areas the Lurraldebus tracker follows),
+  only about buses in view, and the fewest stops that show them: stops 350 m to 8 km ahead of each bus, chosen greedily
+  by how many buses they reveal (two per line). A city view needs about 50 stops per round (about 8 buses per request
+  for the best ones). No request is made when nobody is looking. Requests are rate limited (`BIZKAIBUS_RATE`, default
+  1.5 per second for everybody, two at a time), a stop is not asked again within 25 s, and repeated failures pause the
+  client (circuit breaker). `BIZKAIBUS_LIVE=0` turns the whole thing off. The stop code is the GTFS `stop_id` **padded
+  to four digits** (`0307`; `307` is "unknown").
+- **Measured.** The tracker was run for 20 minutes with a Bilbao view (1,227 requests, no errors) and every answer and
+  snapshot recorded and replayed. At the fix time of each later snapshot, the position the app would have shown was
+  compared with where the bus really was (1,393 comparisons): median error 159 m (90th percentile 495 m) with the stop
+  service, against 332 m (1,031 m) for the snapshot advanced along the timetable, and 640 m (1,800 m) for the snapshot
+  as published. Only 0.6% of the buses were more than 1.5 km off. An observation older than 90 s is no better than the
+  advanced snapshot, which is why it is not used for longer. A rule rejecting matches that travelled far more than the
+  timetable allows made no difference, so there is none.
+- **Cost.** A vehicle list takes about 50 ms more to build (0.05 s to 0.10 s). The stop service also gives live
+  arrival minutes for the stop view; that is not used yet.
+
 ## Villavesas live GPS
 
 Villavesas (Comarca de Pamplona) publishes no GTFS-RT, but its web map (tuvillavesa.es/eu/interactive-map) shows

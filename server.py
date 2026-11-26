@@ -301,6 +301,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     threading.Thread(target=core.updater_loop, daemon=True).start()
     threading.Thread(target=core.lb_tracker_loop, daemon=True).start()
+    threading.Thread(target=core.bz_tracker_loop, daemon=True).start()
     srv = ThreadingHTTPServer((a.host, a.port), Handler)
     srv.daemon_threads = True
     print("Serving on http://%s:%d" % (a.host, a.port))
