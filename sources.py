@@ -95,6 +95,24 @@ SOURCES = [
         "replaces_index": True,
     },
     {
+        # SNCF trains (TER Nouvelle-Aquitaine, Intercites, TGV...) in Ipar Euskal Herria: Hendaye, Biarritz, Bayonne,
+        # Cambo-les-Bains, Saint-Jean-Pied-de-Port... SNCF publishes one GTFS for the whole of France, and its
+        # real-time feeds (through the transport.data.gouv.fr proxy) are national too: like Renfe, the importer keeps
+        # only the trips that call inside Euskal Herria and the real-time entities are cut to them (store.BBOX_AGENCIES).
+        # "NewTripId" is the export whose trip ids match the real-time feeds.
+        "slug": "sncf",
+        "name": "SNCF",
+        "region": "ipar",
+        "gtfs_url": "https://eu.ftp.opendatasoft.com/sncf/plandata/Export_OpenData_SNCF_GTFS_NewTripId.zip",
+        # trip_headsign is the train number: show the destination. The real-time feed lists a trip with delays of
+        # 0 s when it has nothing to say (only disruptions are reported): those trains count as untracked.
+        "quirks": {"headsign_last_stop": True, "zero_delay_untracked": True},
+        "rt": {
+            "trips": "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-trip-updates",
+            "alerts": "https://proxy.transport.data.gouv.fr/resource/sncf-gtfs-rt-service-alerts",
+        },
+    },
+    {
         # Nafarroa, from the Spanish Ministry's National Access Point (dataset ids = ConjuntoDato/Detail/<id>).
         "slug": "navarra_interurbano",
         "name": "Interurbano de Navarra",

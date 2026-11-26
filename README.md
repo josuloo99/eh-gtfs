@@ -10,6 +10,7 @@ has a region (`eus`, `nav`, `ipar`) and the UI lists them side by side.
 |---|---|---|
 | Euskadi | Open Data Euskadi / MovEuskadi (`data-index.json`, read by `core.py`) | all of them (Euskotren, Bizkaibus, Lurraldebus, ...) |
 | Ipar Euskal Herria | transport.data.gouv.fr (configured in `sources.py`) | Txik Txak |
+| Ipar Euskal Herria | SNCF open data (GTFS) and its real-time feeds via transport.data.gouv.fr | SNCF trains: TER, Intercités, TGV (Hendaye, Biarritz, Bayonne, Cambo, Donibane Garazi...) |
 | Nafarroa | Spanish Ministry's National Access Point, NAP (`sources.py`, needs `NAP_API_KEY`) | Interurbano de Navarra, Villavesas (Comarca de Pamplona) |
 | Nafarroa | PDFs typed by hand (`feeds/`, see below) | La Baztanesa (Elizondo - Pamplona - Donostia) |
 | Several areas | NAP and renfe.com | ALSA (NAP), Renfe Cercanias, Renfe Larga y Media Distancia |
@@ -87,6 +88,22 @@ The portal's validator reports thousands of errors on this GTFS-RT feed; checked
   trip of the line). They are shown as "Stop not served", not as a cancelled trip.
 - An arrival/departure pair where one event is hours off and the other is sane (seen: -3.8 h) uses the sane one.
 - There is no vehicle-position feed, so buses are placed from the trip updates and drawn dashed, like Euskotren.
+  The trips without live data are drawn from the timetable (theoretical vehicles).
+
+### SNCF trains (Ipar Euskal Herria)
+
+SNCF publishes one GTFS for the whole of France (`Export_OpenData_SNCF_GTFS_NewTripId.zip`, whose trip ids match the
+real-time feeds) and national GTFS-RT trip updates and service alerts (through `proxy.transport.data.gouv.fr`). It is
+configured like Renfe, as a national feed (`store.BBOX_AGENCIES`): the importer keeps only the trips with a stop inside
+Euskal Herria (about 960 trips: Bordeaux - Dax - Bayonne - Hendaye, Bayonne - Cambo - Donibane Garazi, Bayonne - Pau,
+Paris - Hendaye...) and the real-time entities are cut to them.
+
+- `trip_headsign` is the train number, so every trip gets the name of its last stop as destination
+  (`headsign_last_stop`); a few night trains have no route name (`INCONNU`) and are named "first stop → last stop".
+- The feed has no vehicle positions and lists a trip with 0 s delays when it has nothing to say (it reports disruptions
+  only), so trains with only zero delays count as untracked (`zero_delay_untracked`, as for Txik Txak): they are drawn
+  from the timetable (theoretical vehicles), and only delayed or cancelled ones are live / estimated. Estimated
+  positions run in a straight line between stations (the GTFS has no shapes) and only inside Euskal Herria.
 
 ## Run
 

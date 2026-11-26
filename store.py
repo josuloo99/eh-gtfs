@@ -21,7 +21,7 @@ DB_DIR = os.path.join(DATA_DIR, "db")
 # National feeds (Renfe, all of Spain). Every operator is cut to Euskal Herria at import (see import_gtfs): a trip is
 # kept only if one of its stops is inside the territory (region.py). These are also the feeds whose real-time data
 # is national, and whose trips get a destination derived from their last stop.
-BBOX_AGENCIES = {"renfe_media", "renfe_cercanias"}
+BBOX_AGENCIES = {"renfe_media", "renfe_cercanias", "sncf"}
 # Bump when the importer changes what it stores: the operators are re-imported (the old database serves meanwhile).
 IMPORT_TAG = "|eh3"
 
@@ -119,12 +119,20 @@ def _tidy(s):
     return re.sub(r"\s{2,}", " ", s)
 
 
+def _unknown(s):
+    """Placeholders some feeds use for a missing name (SNCF: 'INCONNU' and '-') are no name at all."""
+    s = (s or "").strip()
+    return "" if s.upper() in ("INCONNU", "UNKNOWN", "-") else s
+
+
 def import_gtfs(zip_path, db_path, slug, source_stamp="", opts=None):
     """Import a GTFS zip into a SQLite database. opts (per-source quirks):
     city_in_name: prefix stop names with the town from stops.txt city_name ("Tarnos - 11 novembre 1918"),
     which is how the other operators of the area name their stops.
     headsign_town: trips without a headsign get the town of their last stop ("Pamplona/Iruña. Estación Bus" ->
-    "Pamplona/Iruña")."""
+    "Pamplona/Iruña").
+    headsign_last_stop: the feed's trip_headsign is not a destination (SNCF gives the train number): every trip gets
+    the name of its last stop instead."""
     opts = opts or {}
     tmp = db_path + ".tmp"
     if os.path.exists(tmp):
@@ -243,7 +251,7 @@ def import_gtfs(zip_path, db_path, slug, source_stamp="", opts=None):
         rtype = (r.get("route_type") or "3").strip()
         db.execute(
             "INSERT OR REPLACE INTO routes VALUES(?,?,?,?,?,?,?)",
-            (rid, (r.get("route_short_name") or "").strip(), _tidy(r.get("route_long_name")),
+            (rid, _unknown(r.get("route_short_name")), _unknown(_tidy(r.get("route_long_name"))),
              int(rtype) if rtype.isdigit() else 3, mode_of(rtype),
              (r.get("route_color") or "").strip(), (r.get("route_text_color") or "").strip()))
 
@@ -255,10 +263,14 @@ def import_gtfs(zip_path, db_path, slug, source_stamp="", opts=None):
                           "WHERE st.tix=t.tix ORDER BY st.seq DESC LIMIT 1) FROM trips t WHERE t.headsign=''").fetchall()
         db.executemany("UPDATE trips SET headsign=? WHERE tix=?",
                        ((re.split(r"\.\s|\s-\s", n or "")[0].strip(), tix) for tix, n in last if n))
-    if national:
+    if national or opts.get("headsign_last_stop"):
         # Renfe leaves trip_headsign empty: use the name of the last stop the trip calls at
-        db.execute("UPDATE trips SET headsign=COALESCE((SELECT s.name FROM stop_times st JOIN stops s ON s.stop_id=st.stop_id "
-                   "WHERE st.tix=trips.tix ORDER BY st.seq DESC LIMIT 1), '') WHERE headsign=''")
+        # (headsign_last_stop: for every trip, whatever the feed says; "Paris Montparnasse Hall 1 - 2" -> "Paris Montparnasse")
+        last = db.execute("SELECT t.tix, (SELECT s.name FROM stop_times st JOIN stops s ON s.stop_id=st.stop_id "
+                          "WHERE st.tix=t.tix ORDER BY st.seq DESC LIMIT 1) FROM trips t %s"
+                          % ("" if opts.get("headsign_last_stop") else "WHERE t.headsign=''")).fetchall()
+        db.executemany("UPDATE trips SET headsign=? WHERE tix=?",
+                       ((re.sub(r"\s+Hall\s*\d[\d\s-]*$", "", n or ""), tix) for tix, n in last))
 
     # calendar (only the services of the kept trips)
     rd = _reader(z, "calendar.txt")

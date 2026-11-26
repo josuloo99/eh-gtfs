@@ -652,8 +652,9 @@ def line_info(db, route_id):
     if not r:
         return {"line": route_id or "", "color": "", "text_color": "", "mode": "bus", "long": ""}
     color, text, _ = route_style(db, r)
-    return {"line": r["short"] or r["long"] or r["route_id"], "color": color, "text_color": text,
-            "mode": r["mode"], "long": r["long"]}
+    long_ = r["long"] or route_long(db.slug, r)         # national feeds: "first stop → last stop" when unnamed
+    return {"line": r["short"] or long_ or r["route_id"], "color": color, "text_color": text,
+            "mode": r["mode"], "long": long_}
 
 
 # --------------------------------------------------------------------------- Lurraldebus live arrivals
@@ -1503,8 +1504,13 @@ def _build_vehicles():
             if not vlist and tus:
                 out.extend(_estimated_vehicles(slug, info, db, tus, now))
             # no GPS and no live arrival data for this operator: draw where the timetable says its vehicles are
-            if not any(o["agency"] == slug for o in out) and not is_lb(slug):
+            mine = [o for o in out if o["agency"] == slug]
+            if not mine and not is_lb(slug):
                 out.extend(_scheduled_vehicles(slug, info, db, now))
+            elif mine and not vlist and (info.get("quirks") or {}).get("zero_delay_untracked"):
+                # a feed that reports only the trips with a delay (SNCF, Txik Txak): the others have no live data,
+                # so they are drawn from the timetable, except those the feed does talk about (delayed, cancelled)
+                out.extend(_scheduled_vehicles(slug, info, db, now, skip=_reported_trips(tus) | {o["trip_id"] for o in mine}))
         except Exception:
             log.exception("vehicle build failed for %s", slug)
     data = {"time": now, "vehicles": out, "feeds": feeds}
@@ -1542,8 +1548,8 @@ def _estimated_vehicles(slug, info, db, tus, now):
                 continue
             geom = shape_geom(db, trip.get("shape_id"))
             pos = _interp(eff, now, stop_distances(db, trip, rows) if geom else None, geom)
-            if not pos:
-                continue
+            if not pos or (is_national(slug) and not region.contains(pos[0], pos[1])):
+                continue                     # a national feed: only the part of the journey inside Euskal Herria
             li = line_info(db, trip["route_id"])
             rt = next((e for e in eff if e["src"] == "rt"), None)
             delay = (rt["dep"] - rt["sched_dep"]) if rt else None
@@ -1577,7 +1583,18 @@ def _trip_spans(slug, db):
     return _span_cache[key]
 
 
-def _scheduled_vehicles(slug, info, db, now):
+def _reported_trips(tus):
+    """Trips a trip-update feed says something about: cancelled, or with a delay at some stop."""
+    out = set()
+    for tid, lst in tus.items():
+        for tu in lst:
+            if tu["trip"].get("rel") == 3 or any((st.get(k) or {}).get("delay") for st in tu["stus"] for k in ("arr", "dep")):
+                out.add(tid)
+                break
+    return out
+
+
+def _scheduled_vehicles(slug, info, db, now, skip=()):
     """Theoretical vehicles: trips that should be running now according to the timetable alone."""
     out = []
     spans = _trip_spans(slug, db)
@@ -1587,7 +1604,7 @@ def _scheduled_vehicles(slug, info, db, now):
             continue
         rel = now - service_midnight(d)
         for tix, tid, route_id, service_id, headsign, shape_id, first, last in spans:
-            if service_id not in active or not first <= rel <= last:
+            if service_id not in active or not first <= rel <= last or tid in skip:
                 continue
             rows = db.trip_stop_times(tix)
             eff, _ = effective_times(slug, rows, d, None)
